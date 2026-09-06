@@ -1,0 +1,56 @@
+# TikTok LIVE connection-ticket broker (`ttl-live-api`) in a container. No browser, no Node.
+#
+# The broker resolves a uniqueId to a live room, signs a direct WebSocket descriptor, and
+# relays browser sockets (`GET /v1/live`) that cannot set TikTok session headers themselves.
+# Set API_KEYS: the broker binds 0.0.0.0 here, and without keys anyone reachable could
+# mint tickets (the binary also prints a startup warning in that case).
+#
+# Railway: set the service Dockerfile path to this file, add API_KEYS, and leave PORT to
+# the platform — the CMD binds 0.0.0.0:${PORT:-8080}. Healthcheck path: /healthz
+# (liveness). /readyz reports the signer warmed up at startup.
+
+FROM rust:1.90-bookworm AS builder
+
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+RUN cargo build --release -p ttl-live-api
+
+
+# Nothing but the binary and a CA bundle: the JavaScript engine is linked into the server.
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# The signing bundle is a public static asset and is deliberately not vendored into the repository.
+# Fetching it at build time pins one version into the image; override TTL_BUNDLE to mount another.
+ARG WEBMSSDK_URL=https://sf16-website-login.neutral.ttwstatic.com/obj/tiktok_web_login_static/webmssdk/1.0.0.388/webmssdk.js
+RUN curl -fsS -o /opt/webmssdk.js "$WEBMSSDK_URL"
+
+COPY --from=builder /src/target/release/ttl-live-api /usr/local/bin/ttl-live-api
+
+ENV TTL_BUNDLE=/opt/webmssdk.js \
+    HOME=/home/signer
+
+# No session volume: unlike the sign server, the broker bootstraps an anonymous guest
+# identity itself when TTL_SESSION_COOKIE/TTL_SESSION_FILE are absent.
+RUN useradd --create-home --uid 1000 signer \
+    && chown -R signer:signer /home/signer
+
+USER signer
+EXPOSE 8080
+
+# The server's graceful shutdown is wired to `tokio::signal::ctrl_c`, which is SIGINT only.
+# `docker stop` sends SIGTERM by default, which the process would take as an unhandled kill;
+# asking for SIGINT instead runs the real shutdown path.
+STOPSIGNAL SIGINT
+
+# Start period covers guest bootstrap plus engine warm-up on a cold container.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s \
+    CMD curl -fsS http://127.0.0.1:${PORT:-8080}/healthz || exit 1
+
+# Shell form so Railway's $PORT expands; the flag beats HTTP_BIND/TTL_BIND when set.
+CMD ["sh", "-c", "exec ttl-live-api --bind 0.0.0.0:${PORT:-8080}"]
