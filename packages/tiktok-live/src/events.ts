@@ -15,6 +15,7 @@ import {
   WebcastSocialMessageSchema,
 } from './gen/webcast/model/message/messages_pb.js';
 import { UserSchema } from './gen/webcast/model/base/user_2_pb.js';
+import type { ImageModel } from './gen/webcast/model/base/messages_pb.js';
 import type { User } from './gen/webcast/model/base/user_2_pb.js';
 import type { Contributor } from './gen/webcast/model/message/messages_pb.js';
 import type {
@@ -66,7 +67,7 @@ function asCount(value: bigint | number): number {
 /// Generated int64 values remain bigint until this explicit public boundary.
 const asId = (value: bigint): string => value.toString();
 
-function firstImageUrl(image: { urlList: string[] } | undefined): string {
+function firstImageUrl(image: ImageModel | undefined): string {
   return image?.urlList[0] ?? '';
 }
 

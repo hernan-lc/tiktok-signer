@@ -53,7 +53,7 @@ function normalizeUser(u: User | undefined) {
 }
 
 /** Protobuf counts are signed; the stable API clamps negatives, as Rust does. */
-function count(value: string | number | bigint | undefined): string {
+function count(value: bigint | number | undefined): string {
     const n = BigInt(value ?? 0);
     return (n < 0n ? 0n : n).toString();
 }

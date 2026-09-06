@@ -4,65 +4,110 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { gzipSync } from 'node:zlib';
 
-import { create, toBinary } from '@bufbuild/protobuf';
-import { ackFrame, decodeBatch, decodePushFrame, decompress } from '../dist/frames.js';
+import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
+import {
+  ackFrame,
+  carriesEvents,
+  decodeBatch,
+  decodePushFrame,
+  decompress,
+  frameCompressType,
+  frameHeaders,
+} from '../dist/frames.js';
 import {
   BaseProtoMessageSchema,
   ProtoMessageFetchResultSchema,
 } from '../dist/gen/webcast/shared/message_pb.js';
+import {
+  HeartBeatMessageSchema,
+  PushHeaderSchema,
+  WebcastImEnterRoomMessageSchema,
+  WebcastPushFrameSchema,
+} from '../dist/gen/webcast/synthetic_proto_pb.js';
 import { enterRoomFrame, heartbeatFrame, pushFrame } from '../dist/player.js';
 
-test('a frame this package builds is one it can read', () => {
-  const frame = decodePushFrame(pushFrame('msg', Buffer.from([1, 2, 3])));
-  assert.equal(frame.payloadType, 'msg');
+const ROOM_ID = 7_675_590_159_819_148_052n;
+const LOG_ID = 9_007_199_254_740_993n;
+
+test('pushFrame serializes a generated WebcastPushFrame', () => {
+  const encoded = pushFrame('msg', Uint8Array.from([1, 2, 3]), { logId: LOG_ID });
+  const frame = fromBinary(WebcastPushFrameSchema, encoded);
+
+  assert.equal(frame.logId, LOG_ID);
   assert.equal(frame.payloadEncoding, 'pb');
-  assert.equal(frame.carriesEvents, true);
+  assert.equal(frame.payloadType, 'msg');
   assert.deepEqual([...frame.payload], [1, 2, 3]);
+
+  const decoded = decodePushFrame(encoded);
+  assert.equal(decoded.logId, LOG_ID);
+  assert.equal(carriesEvents(decoded), true);
 });
 
 test('only msg frames carry events', () => {
   for (const type of ['hb', 'ack', 'im_enter_room_resp']) {
-    assert.equal(decodePushFrame(pushFrame(type, '')).carriesEvents, false, type);
+    assert.equal(carriesEvents(decodePushFrame(pushFrame(type, ''))), false, type);
   }
 });
 
-test('a gzipped payload is decompressed by the frame’s own header', () => {
+test('a gzipped payload is decompressed from the generated repeated headers', () => {
   const body = Buffer.from('the batch would be here');
-  const frame = decodePushFrame(pushFrame('msg', gzipSync(body)));
-  frame.headers.set('compress_type', 'gzip');
-  frame.compressType = 'gzip';
+  const encoded = toBinary(WebcastPushFrameSchema, create(WebcastPushFrameSchema, {
+    payloadEncoding: 'pb',
+    payloadType: 'msg',
+    headers: [create(PushHeaderSchema, { key: 'compress_type', value: 'gzip' })],
+    payload: gzipSync(body),
+  }));
+  const frame = decodePushFrame(encoded);
+
+  assert.equal(frameCompressType(frame), 'gzip');
+  assert.deepEqual(frameHeaders(frame), new Map([['compress_type', 'gzip']]));
   assert.equal(decompress(frame).toString(), body.toString());
 });
 
 // An unrecognised compression should degrade to "cannot read this batch", not to a dead socket.
 test('an unknown compression passes the payload through', () => {
-  const frame = decodePushFrame(pushFrame('msg', Buffer.from('plain')));
-  frame.compressType = 'brotli-someday';
+  const frame = decodePushFrame(toBinary(WebcastPushFrameSchema, create(WebcastPushFrameSchema, {
+    payloadEncoding: 'pb',
+    payloadType: 'msg',
+    headers: [create(PushHeaderSchema, { key: 'compress_type', value: 'brotli-someday' })],
+    payload: Buffer.from('plain'),
+  })));
   assert.equal(Buffer.from(decompress(frame)).toString(), 'plain');
 });
 
 // Unacknowledged frames stop the push a few seconds later, which looks exactly like a quiet room.
-test('an ack echoes the log id and never sends an empty payload', () => {
-  const received = decodePushFrame(pushFrame('msg', ''));
-  received.logId = '42';
-  const empty = decodePushFrame(ackFrame(received, ''));
+test('an ack accepts a generated frame and preserves its exact log id', () => {
+  const received = create(WebcastPushFrameSchema, {
+    logId: LOG_ID,
+    payloadEncoding: 'pb',
+    payloadType: 'msg',
+  });
+  const empty = fromBinary(WebcastPushFrameSchema, ackFrame(received, ''));
   assert.equal(empty.payloadType, 'ack');
-  assert.equal(empty.logId, '42');
+  assert.equal(empty.logId, LOG_ID);
   assert.equal(Buffer.from(empty.payload).toString(), '-');
 
-  const carried = decodePushFrame(ackFrame(received, 'internal-ext-value'));
+  const carried = fromBinary(
+    WebcastPushFrameSchema,
+    ackFrame(received, 'internal-ext-value'),
+  );
+  assert.equal(carried.logId, LOG_ID);
   assert.equal(Buffer.from(carried.payload).toString(), 'internal-ext-value');
 });
 
-test('a batch envelope yields its messages and its ack state', () => {
+test('a generated batch preserves messages, bigint ids, and ack state', () => {
+  const messageId = 9_007_199_254_740_994n;
   const batch = decodeBatch(
     toBinary(ProtoMessageFetchResultSchema, create(ProtoMessageFetchResultSchema, {
       messages: [create(BaseProtoMessageSchema, {
         method: 'WebcastChatMessage',
         payload: Uint8Array.from([9]),
+        msgId: messageId,
+        isHistory: true,
       })],
       cursor: 'cursor-1',
       internalExt: 'ext-1',
+      heartbeatDuration: 10_001n,
       needAck: true,
     })),
   );
@@ -70,23 +115,46 @@ test('a batch envelope yields its messages and its ack state', () => {
   const message = batch.messages[0];
   assert.ok(message);
   assert.equal(message.method, 'WebcastChatMessage');
+  assert.equal(message.msgId, messageId);
+  assert.deepEqual([...message.payload], [9]);
+  assert.equal(message.isHistory, true);
   assert.equal(batch.cursor, 'cursor-1');
   assert.equal(batch.internalExt, 'ext-1');
+  assert.equal(batch.heartbeatDuration, 10_001n);
   assert.equal(batch.needAck, true);
 });
 
-// The two frames a client originates. If either stops matching what the SDK sends, a healthy
-// socket goes silent instead of failing, which is the hardest kind of break to notice.
-test('the enter-room and heartbeat frames keep their shape', () => {
-  const enter = decodePushFrame(enterRoomFrame({ roomId: '7675590159819148052' }));
-  assert.equal(enter.payloadType, 'im_enter_room');
-  assert.ok(enter.payload.length > 0);
+// These frames are decoded with the same generated schemas that encode them. In particular,
+// proto3's omitted empty cursor and zero account_type recover the SDK's expected default values.
+test('the generated enter-room frame preserves the SDK field semantics', () => {
+  const outer = fromBinary(
+    WebcastPushFrameSchema,
+    enterRoomFrame({ roomId: ROOM_ID.toString(), identity: 'audience', liveId: '12' }),
+  );
+  const enter = fromBinary(WebcastImEnterRoomMessageSchema, outer.payload);
 
-  const heartbeat = decodePushFrame(heartbeatFrame('7675590159819148052'));
-  assert.equal(heartbeat.payloadType, 'hb');
+  assert.equal(outer.payloadType, 'im_enter_room');
+  assert.equal(enter.roomId, ROOM_ID);
+  assert.equal(enter.liveId, 12n);
+  assert.equal(enter.identity, 'audience');
+  assert.equal(enter.cursor, '');
+  assert.equal(enter.accountType, 0n);
+  assert.equal(enter.filterWelcomeMsg, '0');
 });
 
-test('frame encoders reject negative and unsafe integer values', () => {
-  assert.throws(() => pushFrame('ack', '-', { logId: -1 }), /non-negative/);
-  assert.throws(() => pushFrame('ack', '-', { logId: Number.MAX_SAFE_INTEGER + 1 }), /safe/);
+test('the generated heartbeat frame preserves the exact room id', () => {
+  const outer = fromBinary(
+    WebcastPushFrameSchema,
+    heartbeatFrame(ROOM_ID.toString()),
+  );
+  const heartbeat = fromBinary(HeartBeatMessageSchema, outer.payload);
+
+  assert.equal(outer.payloadType, 'hb');
+  assert.equal(heartbeat.roomId, ROOM_ID);
+  assert.equal(heartbeat.sendPacketSeqId, 0n);
+});
+
+test('frame encoders reject negative integer values', () => {
+  assert.throws(() => pushFrame('ack', '-', { logId: -1n }), /non-negative/);
+  assert.throws(() => heartbeatFrame('-1'), /non-negative/);
 });

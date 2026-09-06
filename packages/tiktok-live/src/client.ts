@@ -14,7 +14,7 @@ import fs from 'node:fs';
 
 import { Discovery } from './discovery.js';
 import { EVENT, decodeEvent } from './events.js';
-import { ackFrame, decodeBatch, decodePushFrame, decompress } from './frames.js';
+import { ackFrame, carriesEvents, decodeBatch, decodePushFrame, decompress } from './frames.js';
 import {
   IDENTITY, PATH, SOCKET_HOST, enterRoomFrame, heartbeatFrame, socketConfig, socketQuery,
 } from './player.js';
@@ -55,6 +55,10 @@ const FALLBACK_DEVICE_ID = '7300000000000000001';
 
 /// How long to wait for the handshake before calling it refused.
 const OPEN_TIMEOUT_MS = 15_000;
+
+/// Node timers clamp larger delays to a one-millisecond timeout, so keep a server-provided
+/// heartbeat duration within the largest delay they can represent.
+const MAX_HEARTBEAT_MS = 2_147_483_647;
 
 class HandshakeRejectedError extends Error {
   readonly code = 'WS_HANDSHAKE_REJECTED' as const;
@@ -410,7 +414,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
       return;
     }
     // `hb`, `ack` and `im_enter_room_resp` are the transport talking to itself.
-    if (!frame.carriesEvents) return;
+    if (!carriesEvents(frame)) return;
 
     let batch;
     try {
@@ -418,6 +422,13 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     } catch (error) {
       this.emit('error', toError(error));
       return;
+    }
+
+    // The batch owns the transport's heartbeat hint. Keep it as generated bigint until this
+    // application boundary, then clamp it to the range accepted by Node's timers.
+    if (batch.heartbeatDuration > 0n) {
+      const heartbeatMs = Math.min(Number(batch.heartbeatDuration), MAX_HEARTBEAT_MS);
+      if (Number.isFinite(heartbeatMs) && heartbeatMs > 0) this.#startHeartbeat(heartbeatMs);
     }
 
     // Acknowledge before decoding events, not after: an unacknowledged frame stops the push a few
@@ -432,8 +443,8 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
 
     for (const message of batch.messages) {
       const event = this.#enrich(decodeEvent(message.method, message.payload));
-      event.msgId = message.msgId;
-      event.isHistory = Boolean(message.isHistory);
+      event.msgId = message.msgId.toString();
+      event.isHistory = message.isHistory;
       this.emit('event', event);
       this.#emitTypedEvent(event);
     }

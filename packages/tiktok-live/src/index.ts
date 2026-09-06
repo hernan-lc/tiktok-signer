@@ -32,7 +32,15 @@ export type {
   GuestSessionOptions,
   SessionIdentity,
 } from './session.js';
-export { ackFrame, decodeBatch, decodePushFrame, decompress } from './frames.js';
+export {
+  ackFrame,
+  carriesEvents,
+  decodeBatch,
+  decodePushFrame,
+  decompress,
+  frameCompressType,
+  frameHeaders,
+} from './frames.js';
 export { IDENTITY, SOCKET_HOST, PATH, socketConfig, socketQuery } from './player.js';
 export type { BrowserBlockOptions, Compression, Identity, SocketConfig, SocketConfigOptions } from './player.js';
 export type { LoadBundleOptions, Product, SignerOptions } from './signer.js';

@@ -45,7 +45,7 @@ const {
   socketQuery,
 } = player;
 const { PRODUCT, Signer } = signerModule;
-const { ackFrame, decodeBatch, decodePushFrame, decompress } = framesModule;
+const { ackFrame, carriesEvents, decodeBatch, decodePushFrame, decompress } = framesModule;
 
 const args = process.argv.slice(2);
 const bundlePath = args.shift();
@@ -253,7 +253,7 @@ await new Promise((resolve) => {
       const frame = decodePushFrame(body);
       report.validPushFrames += 1;
       if (frame.payloadType === 'im_enter_room_resp') report.enterRoom = 'accepted';
-      if (!frame.carriesEvents) return;
+      if (!carriesEvents(frame)) return;
       report.eventFrames += 1;
       const batch = decodeBatch(decompress(frame));
       report.decodedEvents += batch.messages.length;

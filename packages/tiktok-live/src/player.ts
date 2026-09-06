@@ -7,14 +7,14 @@
 //
 // Nothing here is invented. Every value is read out of the player's own chunk, and
 // `player-audit.mjs` re-reads them from the shipped app on demand and fails when they move. The
-// numbers in `PUSH_FRAME_FIELD` and friends come from the generated protobuf descriptors (the
-// same field ids used by the SDK), named rather than spelled inline, because a bare `6` in an
-// encoder is unreviewable.
+// frame schemas are generated from the same protobuf definitions used by the SDK.
 //
 // `crates/ttl-sign-core/src/params.rs` is the Rust statement of the same thing, and the two are held
 // together by a test rather than by discipline: `TTL_PRINT_QUERY=1 node ws-direct.mjs` prints the
 // query this module builds, and `direct_socket_query_matches_the_player` asserts the Rust builder
 // produces it byte for byte.
+
+import { create, toBinary } from '@bufbuild/protobuf';
 
 import { USER_AGENT } from './session.js';
 import {
@@ -73,40 +73,6 @@ export const FRAME_TYPE = Object.freeze({
 
 /// `payload_encoding`: protobuf, for every frame this module builds.
 const PAYLOAD_ENCODING_PB = 'pb';
-
-// --- protobuf field numbers, from the SDK's own descriptors ---------------------------------------
-
-export const PUSH_FRAME_FIELD = Object.freeze({
-  seqId: WebcastPushFrameSchema.field.seqId.number,
-  logId: WebcastPushFrameSchema.field.logId.number,
-  service: WebcastPushFrameSchema.field.service.number,
-  method: WebcastPushFrameSchema.field.method.number,
-  headers: WebcastPushFrameSchema.field.headers.number,
-  payloadEncoding: WebcastPushFrameSchema.field.payloadEncoding.number,
-  payloadType: WebcastPushFrameSchema.field.payloadType.number,
-  payload: WebcastPushFrameSchema.field.payload.number,
-});
-
-export const ENTER_ROOM_FIELD = Object.freeze({
-  roomId: WebcastImEnterRoomMessageSchema.field.roomId.number,
-  roomTag: WebcastImEnterRoomMessageSchema.field.roomTag.number,
-  liveRegion: WebcastImEnterRoomMessageSchema.field.liveRegion.number,
-  liveId: WebcastImEnterRoomMessageSchema.field.liveId.number,
-  identity: WebcastImEnterRoomMessageSchema.field.identity.number,
-  cursor: WebcastImEnterRoomMessageSchema.field.cursor.number,
-  accountType: WebcastImEnterRoomMessageSchema.field.accountType.number,
-  enterUniqId: WebcastImEnterRoomMessageSchema.field.enterUniqueId.number,
-  filterWelcomeMsg: WebcastImEnterRoomMessageSchema.field.filterWelcomeMsg.number,
-  isAnchorContinueKeepMsg: WebcastImEnterRoomMessageSchema.field.isAnchorContinueKeepMsg.number,
-});
-
-export const HEARTBEAT_FIELD = Object.freeze({
-  roomId: HeartBeatMessageSchema.field.roomId.number,
-  sendPacketSeqId: HeartBeatMessageSchema.field.sendPacketSeqId.number,
-});
-
-const WIRE_VARINT = 0;
-const WIRE_LENGTH_DELIMITED = 2;
 
 type QueryValue = string | number | boolean;
 type QueryRecord = Record<string, unknown>;
@@ -279,36 +245,17 @@ export function socketUrl(config: SocketConfig, block: QueryRecord = browserBloc
 
 // --- the frames ------------------------------------------------------------------------------------
 
-function varint(value: string | number | bigint): number[] {
-  const out: number[] = [];
-  let remaining = BigInt(value);
-  if (remaining < 0n) throw new RangeError('protobuf varints must be non-negative');
-  if (typeof value === 'number' && !Number.isSafeInteger(value)) {
-    throw new RangeError('integer protobuf values must be safe numbers or decimal strings');
-  }
-  do {
-    let byte = Number(remaining & 0x7fn);
-    remaining >>= 7n;
-    if (remaining) byte |= 0x80;
-    out.push(byte);
-  } while (remaining);
-  return out;
+function bytes(value: string | ArrayBuffer | ArrayBufferView): Uint8Array {
+  if (typeof value === 'string') return Buffer.from(value, 'utf8');
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
 }
 
-const tag = (field: number, wire: number): number[] => varint((field << 3) | wire);
-const int64Field = (field: number, value: string | number | bigint): number[] =>
-  [...tag(field, WIRE_VARINT), ...varint(value)];
-const bytesField = (
-  field: number,
-  value: string | ArrayBuffer | ArrayBufferView,
-): number[] => {
-  const body = typeof value === 'string'
-    ? Buffer.from(value, 'utf8')
-    : value instanceof ArrayBuffer
-      ? Buffer.from(value)
-      : Buffer.from(value.buffer, value.byteOffset, value.byteLength);
-  return [...tag(field, WIRE_LENGTH_DELIMITED), ...varint(body.length), ...body];
-};
+function nonNegativeInt64(value: string): bigint {
+  const integer = BigInt(value);
+  if (integer < 0n) throw new RangeError('protobuf int64 values must be non-negative');
+  return integer;
+}
 
 /// Wrap a payload in the `PushFrame` the socket expects.
 ///
@@ -317,14 +264,16 @@ const bytesField = (
 export function pushFrame(
   payloadType: string,
   payload: string | ArrayBuffer | ArrayBufferView,
-  { logId = 0 }: { logId?: string | number | bigint } = {},
+  { logId = 0n }: { logId?: bigint } = {},
 ): Buffer {
-  return Buffer.from([
-    ...(logId ? int64Field(PUSH_FRAME_FIELD.logId, logId) : []),
-    ...bytesField(PUSH_FRAME_FIELD.payloadEncoding, PAYLOAD_ENCODING_PB),
-    ...bytesField(PUSH_FRAME_FIELD.payloadType, payloadType),
-    ...bytesField(PUSH_FRAME_FIELD.payload, payload),
-  ]);
+  if (logId < 0n) throw new RangeError('protobuf int64 values must be non-negative');
+  const frame = create(WebcastPushFrameSchema, {
+    logId,
+    payloadEncoding: PAYLOAD_ENCODING_PB,
+    payloadType,
+    payload: bytes(payload),
+  });
+  return Buffer.from(toBinary(WebcastPushFrameSchema, frame));
 }
 
 /// The frame that makes the server start pushing. Without it a healthy socket stays silent.
@@ -333,20 +282,23 @@ export function enterRoomFrame({
   identity = IDENTITY.audience,
   liveId = LIVE_ID,
 }: { roomId: string; identity?: Identity; liveId?: string }): Buffer {
-  const payload = Buffer.from([
-    ...int64Field(ENTER_ROOM_FIELD.roomId, roomId),
-    ...int64Field(ENTER_ROOM_FIELD.liveId, liveId),
-    ...bytesField(ENTER_ROOM_FIELD.identity, identity),
-    ...bytesField(ENTER_ROOM_FIELD.cursor, ''),
-    ...int64Field(ENTER_ROOM_FIELD.accountType, 0),
-    ...bytesField(ENTER_ROOM_FIELD.filterWelcomeMsg, '0'),
-  ]);
-  return pushFrame(FRAME_TYPE.enterRoom, payload);
+  const message = create(WebcastImEnterRoomMessageSchema, {
+    roomId: nonNegativeInt64(roomId),
+    liveId: nonNegativeInt64(liveId),
+    identity,
+    // Proto3 serialization omits these defaults. The server observes the same decoded values,
+    // and no protocol evidence requires presence for either field.
+    cursor: '',
+    accountType: 0n,
+    filterWelcomeMsg: '0',
+  });
+  return pushFrame(FRAME_TYPE.enterRoom, toBinary(WebcastImEnterRoomMessageSchema, message));
 }
 
 /// The application keepalive. The socket closes without it; protocol pings are not answered.
 export function heartbeatFrame(roomId: string): Buffer {
-  return pushFrame(FRAME_TYPE.heartbeat, Buffer.from(int64Field(HEARTBEAT_FIELD.roomId, roomId)));
+  const message = create(HeartBeatMessageSchema, { roomId: nonNegativeInt64(roomId) });
+  return pushFrame(FRAME_TYPE.heartbeat, toBinary(HeartBeatMessageSchema, message));
 }
 
 function isQueryValue(value: unknown): value is QueryValue {
