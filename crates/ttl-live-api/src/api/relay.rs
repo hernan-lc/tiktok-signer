@@ -5,10 +5,13 @@
 //! browser socket shows). The relay therefore dials TikTok with the ticket headers and pipes
 //! raw frames both ways. The browser still owns the protocol: it sends `enter-room`,
 //! heartbeats and ACKs, and decodes events — the broker never interprets the stream, it only
-//! forwards bytes. Each relay resolves a fresh ticket, mirroring SDK reconnect semantics.
+//! forwards bytes. An old signed URL is never reused: each relay resolves a fresh ticket,
+//! mirroring SDK reconnect semantics (re-sign on every new handshake).
 //!
 //! Only `uniqueId` (and an optional `apiKey` query alias, since a page socket cannot send an
-//! `Authorization` header either) enters here. Cookies, signatures and keys never reach logs.
+//! `Authorization` header either) enters here. Query keys are tolerated for a local check
+//! tool only: secrets in URLs surface in DevTools, proxy/CDN access logs, tracing, and
+//! pasted URLs. Cookies, signatures and keys never reach logs.
 
 use std::sync::Arc;
 
@@ -31,7 +34,7 @@ use crate::error::ApiError;
 use crate::service::{normalize_unique_id, ConnectService, ConnectStatus, ConnectionDescriptor};
 
 /// Query input. `uniqueId` keeps its POST-contract spelling; `apiKey` exists because a page
-/// socket cannot send headers.
+/// socket cannot send headers (see the module docs for why query secrets stay local-only).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LiveParams {
@@ -76,6 +79,10 @@ async fn live_inner(service: Arc<ConnectService>, request: Request<Body>) -> Res
     if let Err(error) = service.check_rate_limit(&customer_id, &unique_id).await {
         return error_response(error, request_id);
     }
+    // Bounds relay *setup* (resolve/sign/dial), not live sockets: the permit drops when
+    // this handler returns the upgrade response, while the relay(...) task stays up.
+    // Deliberate for a local check tool; an Internet-facing endpoint would need a
+    // separate cap on concurrent relays.
     let _request_slot = match service.try_request_slot() {
         Ok(slot) => slot,
         Err(error) => return error_response(error, request_id),
@@ -133,9 +140,13 @@ async fn live_inner(service: Arc<ConnectService>, request: Request<Body>) -> Res
         }
     };
     info!(request_id, unique_id, room_id, "relay open");
-    upgrade
+    let mut response = upgrade
         .on_upgrade(move |browser| relay(browser, tiktok, unique_id, room_id, request_id))
-        .into_response()
+        .into_response();
+    response
+        .headers_mut()
+        .insert("x-request-id", request_id_header(request_id));
+    response
 }
 
 /// Forward raw frames until either side goes away, then drop both halves.

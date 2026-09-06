@@ -26,7 +26,10 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            bind: "0.0.0.0:8080".into(),
+            // Loopback by default: with empty `API_KEYS` anyone who can reach the port can
+            // mint tickets, so listening on all interfaces must stay an explicit choice
+            // (`--bind`, `HTTP_BIND`/`TTL_BIND`), which prints a startup warning.
+            bind: "127.0.0.1:8080".into(),
             max_concurrent_signs: 32,
             max_concurrent_discovery: 64,
             max_concurrent_requests: 256,
@@ -50,7 +53,7 @@ impl AppConfig {
     pub fn from_env() -> Self {
         let defaults = Self::default();
         let mut config = Self {
-            bind: env_string("HTTP_BIND", defaults.bind),
+            bind: env_string("HTTP_BIND", env_string("TTL_BIND", defaults.bind)),
             max_concurrent_signs: env_usize("MAX_CONCURRENT_SIGNS", defaults.max_concurrent_signs),
             max_concurrent_discovery: env_usize(
                 "MAX_CONCURRENT_DISCOVERY",
@@ -99,8 +102,21 @@ impl AppConfig {
     }
 }
 
-fn env_string(name: &str, default: String) -> String {
-    std::env::var(name)
+/// Whether a `host:port` bind address stays on this machine. Used for the startup
+/// warning when the broker would otherwise mint tickets for anyone on the network.
+pub fn binds_loopback(bind: &str) -> bool {
+    let host = bind
+        .rsplit_once(':')
+        .map(|(host, _)| host)
+        .unwrap_or(bind);
+    let host = host.trim().trim_matches(|c| c == '[' || c == ']');
+    host.eq_ignore_ascii_case("localhost")
+        || host == "::1"
+        || host == "127.0.0.1"
+        || host.starts_with("127.")
+}
+
+fn env_string(name: &str, default: String) -> String {    std::env::var(name)
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(default)
@@ -162,8 +178,18 @@ mod tests {
     }
 
     #[test]
-    fn api_keys_are_parsed_without_exposing_values_in_labels() {
-        let keys = parse_api_keys(Some("secret-a=acme,secret-b, ,secret-c= team "));
+    fn default_bind_stays_on_loopback() {
+        assert_eq!(AppConfig::default().bind, "127.0.0.1:8080");
+        assert!(binds_loopback("127.0.0.1:8080"));
+        assert!(binds_loopback("localhost:8080"));
+        assert!(binds_loopback("[::1]:8080"));
+        assert!(!binds_loopback("0.0.0.0:8080"));
+        assert!(!binds_loopback("[::]:8080"));
+        assert!(!binds_loopback("192.168.1.10:8080"));
+    }
+
+    #[test]
+    fn api_keys_are_parsed_without_exposing_values_in_labels() {        let keys = parse_api_keys(Some("secret-a=acme,secret-b, ,secret-c= team "));
         assert_eq!(keys.get("secret-a"), Some(&"acme".to_string()));
         assert_eq!(keys.get("secret-b"), Some(&"api-key".to_string()));
         assert_eq!(keys.get("secret-c"), Some(&"team".to_string()));

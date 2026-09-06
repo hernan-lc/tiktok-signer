@@ -20,7 +20,10 @@ cargo run -p ttl-live-api -- --bundle ./webmssdk.js --bind 127.0.0.1:8080
 cargo run -p ttl-live-api -- --help
 ```
 
-The env equivalents are `SIGNING_BUNDLE` (or `TTL_BUNDLE`), `HTTP_BIND`, and `API_KEYS`.
+The env equivalents are `SIGNING_BUNDLE` (or `TTL_BUNDLE`), `HTTP_BIND` (or `TTL_BIND`),
+and `API_KEYS`. The broker binds `127.0.0.1:8080` unless told otherwise; binding a
+non-loopback address without `API_KEYS` prints a startup warning, since anyone who can reach
+the port could mint tickets.
 An existing session can be supplied with
 `TTL_SESSION_COOKIE` or `TTL_SESSION_FILE`; otherwise the service bootstraps one anonymous web
 identity at startup.

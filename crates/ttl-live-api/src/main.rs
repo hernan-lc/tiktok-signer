@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use tracing::info;
+use tracing::{info, warn};
 use ttl_live_api::cli::{CliArgs, CliExit, HELP};
 use ttl_live_api::identity::bootstrap_guest_identity;
 use ttl_live_api::service::{BackendSigner, DiscoveryResolver};
@@ -34,6 +34,13 @@ async fn main() -> Result<()> {
     };
     // Explicit flags win; anything unset falls back to env, then built-in defaults.
     let config = cli.apply(AppConfig::from_env());
+    if config.api_keys.is_empty() && !ttl_live_api::config::binds_loopback(&config.bind) {
+        warn!(
+            bind = %config.bind,
+            "listening on a non-loopback address without API_KEYS: anyone who can reach \
+             this port can mint LIVE tickets; bind 127.0.0.1 or set API_KEYS"
+        );
+    }
     let preset = Preset::new(
         DevicePreset::chrome_linux(),
         LocationPreset::us_east(),

@@ -28,7 +28,9 @@ ARGS:
 OPTIONS:
     --bundle <PATH>     Signing bundle (overrides SIGNING_BUNDLE / TTL_BUNDLE).
     --bind <ADDR>       Listen address, e.g. 127.0.0.1:18081
-                        (default 0.0.0.0:8080, overrides HTTP_BIND).
+                        (default 127.0.0.1:8080, overrides HTTP_BIND / TTL_BIND).
+                        Binding a non-loopback address without API_KEYS prints a
+                        startup warning: anyone reachable could mint tickets.
     --api-keys <LIST>   Comma-separated secret=customer pairs (overrides API_KEYS).
     -h, --help          Print this help and exit.
 ";
