@@ -87,6 +87,10 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   #roomId: string | null = null;
   #status: ConnectionStatus = 'offline';
   #socket: WebSocketLike | null = null;
+  // Set only on the socket `open` event. `#socket` is assigned (and `#status` becomes
+  // `live`) as soon as the handshake starts, so neither alone means the connection is
+  // usable — `connected` must wait for the actual open.
+  #socketOpen = false;
   #heartbeat: NodeJS.Timeout | null = null;
   #reconnectTimer: NodeJS.Timeout | null = null;
   #connecting: Promise<LiveState> | null = null;
@@ -117,7 +121,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   }
 
   get connected(): boolean {
-    return this.#socket !== null && this.#status === 'live';
+    return this.#socketOpen && this.#status === 'live';
   }
 
   get gifts(): ReadonlyMap<string, Gift> {
@@ -147,6 +151,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
 
   disconnect(): void {
     this.#closing = true;
+    this.#socketOpen = false;
     if (this.#reconnectTimer) clearTimeout(this.#reconnectTimer);
     this.#reconnectTimer = null;
     this.#stopHeartbeat();
@@ -241,6 +246,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
         opened = true;
         this.#startHeartbeat(socket, roomId, 10_000);
         this.#status = 'live';
+        this.#socketOpen = true;
         this.#attempt = 0;
         clearTimeout(timer);
         settled = true;
@@ -259,6 +265,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
 
       socket.addEventListener('close', (event) => {
         if (this.#socket === socket) this.#socket = null;
+        this.#socketOpen = false;
         this.#stopHeartbeat();
         clearTimeout(timer);
         if (!opened) {

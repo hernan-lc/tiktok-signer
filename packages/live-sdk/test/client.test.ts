@@ -59,6 +59,41 @@ class FakeWebSocket implements WebSocketLike {
 
 const WebSocketImpl = FakeWebSocket as unknown as WebSocketConstructor;
 
+/// Same shape as [`FakeWebSocket`] but the `open` event only fires when the test says
+/// so, exposing the handshake window where the ticket is live but no socket is usable.
+class HeldWebSocket implements WebSocketLike {
+  static instances: HeldWebSocket[] = [];
+  readonly binaryType = 'arraybuffer';
+  readonly sent: Array<ArrayBuffer | ArrayBufferView> = [];
+  readonly #listeners = new Map<string, Function[]>();
+
+  constructor(readonly url: string, _options: WebSocketOptions) {
+    HeldWebSocket.instances.push(this);
+  }
+
+  send(data: string | ArrayBuffer | ArrayBufferView): void {
+    if (typeof data !== 'string') this.sent.push(data);
+  }
+
+  close(): void {
+    this.dispatch('close', { code: 1000, reason: 'done' });
+  }
+
+  open(): void {
+    this.dispatch('open');
+  }
+
+  addEventListener(type: string, listener: Function): void {
+    this.#listeners.set(type, [...(this.#listeners.get(type) ?? []), listener]);
+  }
+
+  dispatch(type: string, event?: unknown): void {
+    for (const listener of this.#listeners.get(type) ?? []) listener(event);
+  }
+}
+
+const HeldWebSocketImpl = HeldWebSocket as unknown as WebSocketConstructor;
+
 function liveResponse(url = LIVE_URL): Response {
   return new Response(JSON.stringify({
     version: 1,
@@ -140,8 +175,30 @@ test('socket close obtains a fresh descriptor through the API with jittered reco
   live.disconnect();
 });
 
-test('offline is a successful SDK state and emits offline', async () => {
-  let offline = 0;
+test('connected stays false until the socket open event, even with a live ticket', async () => {
+  HeldWebSocket.instances = [];
+  const live = new TikTokLive('creator', {
+    fetchImpl: async () => liveResponse(),
+    WebSocketImpl: HeldWebSocketImpl,
+    reconnect: { attempts: 0, initialMs: 0, maxMs: 0 },
+  });
+  const pending = live.connect();
+  // Let the ticket resolve and the handshake start while the open event is withheld.
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(HeldWebSocket.instances.length, 1);
+  assert.equal(live.roomId, '7300');
+  assert.equal(live.connected, false);
+  assert.equal(live.state().connected, false);
+
+  HeldWebSocket.instances[0]?.open();
+  const state = await pending;
+  assert.equal(state.connected, true);
+  assert.equal(live.connected, true);
+  live.disconnect();
+  assert.equal(live.connected, false);
+});
+
+test('offline is a successful SDK state and emits offline', async () => {  let offline = 0;
   const live = new TikTokLive('creator', {
     fetchImpl: async () => new Response(JSON.stringify({
       version: 1, uniqueId: 'creator', status: 'offline', roomId: '7300',

@@ -87,7 +87,17 @@ impl RoomLookup {
     /// Parse the response from [`room_lookup_url`].
     pub fn from_json(raw: &str) -> Option<Self> {
         let value: serde_json::Value = serde_json::from_str(raw).ok()?;
-        let user = value.get("data")?.get("user")?;
+        Self::from_value(&value)
+    }
+
+    /// Parse an already-decoded lookup body. Splitting parsing from classification lets
+    /// callers tell "valid JSON without a user" (unknown handle) apart from "not JSON at
+    /// all" (schema/transport change), which must never share an outcome.
+    pub fn from_value(value: &serde_json::Value) -> Option<Self> {
+        let user = value
+            .get("data")?
+            .get("user")
+            .filter(|user| !user.is_null())?;
         let live_room = value.get("data").and_then(|d| d.get("liveRoom"));
 
         Some(Self {
@@ -602,6 +612,7 @@ mod tests {
     fn malformed_json_returns_none_instead_of_panicking() {
         assert!(RoomLookup::from_json("no soy json").is_none());
         assert!(RoomLookup::from_json(r#"{"data":{}}"#).is_none());
+        assert!(RoomLookup::from_json(r#"{"data":{"user":null}}"#).is_none());
     }
 
     #[test]

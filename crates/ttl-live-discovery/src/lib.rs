@@ -113,6 +113,11 @@ pub enum DiscoveryError {
     Status { status: u16 },
     #[error("discovery response could not be parsed: {0}")]
     Decode(String),
+    /// Valid JSON with no `data.user`: the handle does not resolve. Kept distinct from
+    /// [`DiscoveryError::Decode`] so a TikTok schema change (unparseable body) can never
+    /// be reported as "user does not exist".
+    #[error("lookup answered without a user: {0}")]
+    UserNotFound(String),
     /// The endpoint answered, but the user has no live room. This is a normal outcome, not a
     /// failure of the client, and is distinguished so a caller does not retry it.
     #[error("@{0} has no live room")]
@@ -217,7 +222,21 @@ pub fn interpret_room_lookup(
     if !(200..300).contains(&status) {
         return Err(DiscoveryError::Status { status });
     }
-    let lookup = room::RoomLookup::from_json(body).ok_or_else(|| {
+    let value: serde_json::Value = serde_json::from_str(body)
+        .map_err(|_| DiscoveryError::Decode(format!("unexpected lookup response for @{unique_id}")))?;
+    // Valid JSON without a user means the handle does not resolve. This check runs
+    // before field parsing so only genuinely absent users — never a schema change,
+    // which fails the parse above — take the not-found path.
+    let has_user = value
+        .get("data")
+        .and_then(|data| data.get("user"))
+        .is_some_and(|user| !user.is_null());
+    if !has_user {
+        return Err(DiscoveryError::UserNotFound(
+            unique_id.trim_start_matches('@').to_string(),
+        ));
+    }
+    let lookup = room::RoomLookup::from_value(&value).ok_or_else(|| {
         DiscoveryError::Decode(format!("unexpected lookup response for @{unique_id}"))
     })?;
     // The endpoint reports an absent room as an empty string or a literal `0`, never by omitting
@@ -363,6 +382,20 @@ mod tests {
             interpret_room_lookup("fixture", 200, ""),
             Err(DiscoveryError::Decode(_))
         ));
+    }
+
+    /// Valid JSON without a user is the unknown-handle signal — distinct from Decode so a
+    /// TikTok schema change can never report a valid user as nonexistent.
+    #[test]
+    fn a_missing_user_is_not_found_not_a_decode_failure() {
+        assert_eq!(
+            interpret_room_lookup("fixture", 200, r#"{"data":{}}"#),
+            Err(DiscoveryError::UserNotFound("fixture".into()))
+        );
+        assert_eq!(
+            interpret_room_lookup("@fixture", 200, r#"{"data":{"user":null}}"#),
+            Err(DiscoveryError::UserNotFound("fixture".into()))
+        );
     }
 
     /// The client builds without a browser; this is the crate's reason for existing.
