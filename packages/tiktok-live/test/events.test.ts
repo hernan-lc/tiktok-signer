@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { create, toBinary } from '@bufbuild/protobuf';
-import { EVENT, METHOD, decodeEvent, decodeUser, label } from '../dist/events.js';
+import { EVENT, METHOD, decodeEvent, decodeUser, label, safeCount } from '../dist/events.js';
 import { UserSchema } from '../dist/gen/webcast/model/base/user_2_pb.js';
 import { GiftSchema } from '../dist/gen/webcast/model/color_group_pb.js';
 import {
@@ -14,6 +14,12 @@ import {
 } from '../dist/gen/webcast/model/message/messages_pb.js';
 
 const USER_ID = 6810000000000000123n;
+
+test('count conversion clamps overflow and normalizes negatives', () => {
+  assert.equal(safeCount(9007199254740993n), Number.MAX_SAFE_INTEGER);
+  assert.equal(safeCount(-1n), 0);
+  assert.equal(safeCount(42n), 42);
+});
 
 test('a chat message carries its user and its text', () => {
   const event = decodeEvent(

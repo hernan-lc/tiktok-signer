@@ -74,7 +74,8 @@ export const FRAME_TYPE = Object.freeze({
 /// `payload_encoding`: protobuf, for every frame this module builds.
 const PAYLOAD_ENCODING_PB = 'pb';
 
-type QueryValue = string | number | boolean;
+export type QueryPrimitive = string | number | boolean | bigint;
+export type QueryValue = QueryPrimitive | null | undefined;
 type QueryRecord = Record<string, unknown>;
 
 export interface BrowserBlockOptions {
@@ -95,7 +96,7 @@ export interface SocketConfigOptions {
   appLanguage?: string;
 }
 
-export interface SocketConfig extends QueryRecord {
+export interface SocketConfig {
   aid: string;
   appName: string;
   liveId: string;
@@ -114,6 +115,13 @@ export interface SocketConfig extends QueryRecord {
   internalExt: string;
   historyCommentCursor: string;
   heartbeatDuration: string;
+  didRule?: QueryValue;
+  pushServer?: string;
+  routeParamsMap?: Readonly<Record<string, QueryValue>>;
+  host?: string;
+  debug?: boolean;
+  filterByRoomId?: QueryValue;
+  [key: string]: unknown;
 }
 
 // --- the query the signature covers ----------------------------------------------------------------
@@ -233,7 +241,7 @@ export function socketQuery(config: SocketConfig, block: QueryRecord = browserBl
     compress: config.compress,
     webcastLanguage: config.appLanguage,
     ...block,
-    ...(routeParamsMap || {}),
+    ...(routeParamsMap ?? {}),
     ...strip(rest),
   }, block));
 }
@@ -301,6 +309,9 @@ export function heartbeatFrame(roomId: string): Buffer {
   return pushFrame(FRAME_TYPE.heartbeat, toBinary(HeartBeatMessageSchema, message));
 }
 
-function isQueryValue(value: unknown): value is QueryValue {
-  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
+function isQueryValue(value: unknown): value is QueryPrimitive {
+  return typeof value === 'string'
+    || typeof value === 'number'
+    || typeof value === 'boolean'
+    || typeof value === 'bigint';
 }

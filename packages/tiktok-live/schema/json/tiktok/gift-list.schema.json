@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ttl-live.dev/schema/tiktok/gift-list.schema.json",
+  "title": "TikTok Gift List Response",
+  "x-typescript-name": "TikTokGiftListResponse",
+  "type": "object",
+  "properties": {
+    "status_code": { "type": "integer" },
+    "data": {
+      "type": "object",
+      "properties": {
+        "message": { "type": "string" },
+        "gifts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "$ref": "./common.schema.json#/$defs/idOrSafeNumber" },
+              "name": { "type": "string" },
+              "describe": { "type": "string" },
+              "diamond_count": { "$ref": "./common.schema.json#/$defs/count" },
+              "combo": { "type": "boolean" },
+              "type": { "$ref": "./common.schema.json#/$defs/count" },
+              "icon": { "$ref": "./common.schema.json#/$defs/image" }
+            },
+            "required": ["id"],
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "required": ["status_code"],
+  "additionalProperties": true
+}

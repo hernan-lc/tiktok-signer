@@ -1,163 +1,49 @@
 // Stable listener-facing application types.
 //
-// These are intentionally not protobuf schema types: generated v3 messages under `gen/` model
-// TikTok's wire layout, while these types model the small normalized API exposed by this package.
-// Keeping this adapter boundary prevents schema churn from becoming a public API change.
+// The JSON Schema files under schema/json/public are the source of truth for normalized JSON
+// objects. These aliases keep the package's existing public import surface while making the
+// generated contracts the types consumers autocomplete against. Protobuf transport types remain
+// under gen/webcast and are intentionally not redefined here.
 
-export interface EventUser {
-  /** 64-bit id as a decimal string: it exceeds `Number.MAX_SAFE_INTEGER`. */
-  userId: string;
-  nickname: string;
-  /** The `@handle`. */
-  uniqueId: string;
-  secUid: string;
-  /** Avatar thumbnail URL extracted from field 9 if present. */
-  avatarUrl?: string;
-}
+import type { BaseEvent as GeneratedBaseEvent } from './gen/json/public/base-event.js';
+import type { ChatEvent as GeneratedChatEvent } from './gen/json/public/chat-event.js';
+import type { GiftEvent as GeneratedGiftEvent } from './gen/json/public/gift-event.js';
+import type { LikeEvent as GeneratedLikeEvent } from './gen/json/public/like-event.js';
+import type { MemberEvent as GeneratedMemberEvent } from './gen/json/public/member-event.js';
+import type { RoomUserEvent as GeneratedRoomUserEvent } from './gen/json/public/room-user-event.js';
+import type { SocialEvent as GeneratedSocialEvent } from './gen/json/public/social-event.js';
 
-export interface BaseEvent {
-  method: string;
-  msgId?: string;
-  isHistory?: boolean;
-}
+export type { BaseEvent } from './gen/json/public/base-event.js';
+export type { ChatEvent } from './gen/json/public/chat-event.js';
+export type { ClientState } from './gen/json/public/client-state.js';
+export type { EventUser } from './gen/json/public/event-user.js';
+export type { Gift } from './gen/json/public/gift.js';
+export type { GiftEvent } from './gen/json/public/gift-event.js';
+export type { LikeEvent } from './gen/json/public/like-event.js';
+export type { LiveRoom } from './gen/json/public/live-room.js';
+export type { MemberEvent } from './gen/json/public/member-event.js';
+export type { ReconnectPolicy } from './gen/json/public/reconnect-policy.js';
+export type { RoomInfo } from './gen/json/public/room-info.js';
+export type { RoomLookup } from './gen/json/public/room-lookup.js';
+export type { RoomOwner } from './gen/json/public/room-owner.js';
+export type { RoomUserEvent } from './gen/json/public/room-user-event.js';
+export type { SocialEvent } from './gen/json/public/social-event.js';
+export type { TopViewer } from './gen/json/public/top-viewer.js';
 
-export interface ChatEvent extends BaseEvent {
-  type: 'chat';
-  user: EventUser;
-  comment: string;
-}
-
-export interface GiftEvent extends BaseEvent {
-  type: 'gift';
-  user: EventUser;
-  toUser: EventUser;
-  giftId: string;
-  giftName: string;
-  diamondCount: number;
-  repeatCount: number;
-  comboCount: number;
-  groupId: string;
-  repeatEnd: boolean;
-  streakable?: boolean;
-  giftIconUrl?: string;
-}
-
-export interface LikeEvent extends BaseEvent {
-  type: 'like';
-  user: EventUser;
-  count: number;
-  total: number;
-}
-
-export interface MemberEvent extends BaseEvent {
-  type: 'member';
-  user: EventUser;
-  memberCount: number;
-  action: number;
-}
-
-export interface SocialEvent extends BaseEvent {
-  type: 'social';
-  user: EventUser;
-  action: number;
-  followCount: number;
-  shareCount: number;
-}
-
-export interface TopViewer {
-  rank: number;
-  score: number;
-  delta: number;
-  user: EventUser;
-}
-
-export interface RoomUserEvent extends BaseEvent {
-  type: 'roomUser';
-  viewers: number;
-  popularity: number;
-  totalUser: number;
-  anonymous: number;
-  topViewers: TopViewer[];
-  rankedViewers: TopViewer[];
-}
-
-export interface UnknownEvent extends BaseEvent {
+/// Binary payloads are intentionally kept as Uint8Array; this is not a JSON contract.
+export type UnknownEvent = GeneratedBaseEvent & {
   type: 'unknown';
   payload: Uint8Array;
-}
+};
 
 export type LiveEvent =
-  | ChatEvent
-  | GiftEvent
-  | LikeEvent
-  | MemberEvent
-  | SocialEvent
-  | RoomUserEvent
+  | GeneratedChatEvent
+  | GeneratedGiftEvent
+  | GeneratedLikeEvent
+  | GeneratedMemberEvent
+  | GeneratedSocialEvent
+  | GeneratedRoomUserEvent
   | UnknownEvent;
-
-export interface RoomOwner {
-  userId: string;
-  uniqueId: string;
-  nickname: string;
-  secUid: string;
-  avatarUrl: string;
-  followerCount: number;
-}
-
-export interface RoomInfo {
-  roomId: string;
-  title: string;
-  status: number;
-  viewers: number;
-  likes: number;
-  comments: number;
-  shares: number;
-  follows: number;
-  coverUrl: string;
-  shareUrl: string;
-  owner: RoomOwner;
-}
-
-export interface RoomLookup {
-  uniqueId: string;
-  roomId: string;
-  nickname: string;
-  status: number;
-  title: string;
-  isLive: boolean;
-}
-
-export interface LiveRoom {
-  uniqueId: string;
-  roomId: string;
-  nickname: string;
-  title: string;
-  viewers: number;
-}
-
-export interface Gift {
-  id: string;
-  name: string;
-  describe: string;
-  diamondCount: number;
-  combo: boolean;
-  giftType: number;
-  iconUrl: string;
-}
-
-export interface ReconnectPolicy {
-  attempts: number;
-  initialMs: number;
-  maxMs: number;
-}
-
-export interface ClientState {
-  uniqueId: string;
-  roomId: string;
-  connected: boolean;
-  roomInfo: RoomInfo | null;
-  giftCount: number;
-}
 
 export interface WebSocketOptions {
   headers: Record<string, string>;

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ttl-live.dev/schema/public/room-lookup.schema.json",
+  "title": "ttl-live Room Lookup",
+  "x-typescript-name": "RoomLookup",
+  "type": "object",
+  "properties": {
+    "uniqueId": { "type": "string" },
+    "roomId": { "type": "string", "pattern": "^[0-9]*$" },
+    "nickname": { "type": "string" },
+    "status": { "type": "integer" },
+    "title": { "type": "string" },
+    "isLive": { "type": "boolean" }
+  },
+  "required": ["uniqueId", "roomId", "nickname", "status", "title", "isLive"],
+  "additionalProperties": false
+}

@@ -13,7 +13,7 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist", "src", "vendor", "README.md"],
+  "files": ["dist", "src", "schema", "scripts", "vendor", "README.md"],
   "engines": { "node": ">=22" },
   "scripts": {
     "clean": "node -e \"const fs=require('node:fs'); for (const path of ['dist','.test-dist','.example-dist']) fs.rmSync(path,{recursive:true,force:true})\"",
@@ -21,12 +21,15 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "npm run build && tsc -p tsconfig.test.json --noEmit && tsc -p tsconfig.example.json --noEmit",
     "test": "npm run build && tsc -p tsconfig.test.json && node --test .test-dist/*.test.js",
-    "check": "npm run proto:check && npm run typecheck && npm test",
     "prepack": "npm run check",
     "sync-bootstrap": "node ../../scripts/headless/tools/build-bootstrap.mjs vendor/bootstrap.js",
     "listen": "npm run build && tsc -p tsconfig.example.json && node .example-dist/listen.js",
     "proto:generate": "cd ../.. && buf generate --template buf.gen.yaml",
-    "proto:check": "npm run proto:generate && git diff --exit-code -- src/gen"
+    "proto:check": "npm run proto:generate && git diff --exit-code -- src/gen/webcast",
+    "schema:generate": "node scripts/generate-json-types.mjs",
+    "schema:check": "npm run schema:generate && git diff --exit-code -- src/gen/json",
+    "generate": "npm run proto:generate && npm run schema:generate",
+    "check": "npm run proto:check && npm run schema:check && npm run typecheck && npm test"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.14.1"

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ttl-live.dev/schema/public/like-event.schema.json",
+  "title": "ttl-live Like Event",
+  "x-typescript-name": "LikeEvent",
+  "allOf": [
+    { "$ref": "./base-event.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "like" },
+        "user": { "$ref": "./event-user.schema.json" },
+        "count": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "total": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+      },
+      "required": ["type", "user", "count", "total"],
+      "additionalProperties": true,
+      "x-typescript-no-index": true
+    }
+  ]
+}

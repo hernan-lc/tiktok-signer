@@ -1,0 +1,44 @@
+// Generated file. Do not edit manually.
+// Source: schema/json/public/event-user.schema.json
+
+export type EventUser = {
+  userId: string;
+  nickname: string;
+  uniqueId: string;
+  secUid: string;
+  avatarUrl?: string;
+};
+
+export const EventUserSchema = {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ttl-live.dev/schema/public/event-user.schema.json",
+  "title": "ttl-live Event User",
+  "x-typescript-name": "EventUser",
+  "type": "object",
+  "properties": {
+    "userId": {
+      "type": "string",
+      "pattern": "^[0-9]+$"
+    },
+    "nickname": {
+      "type": "string"
+    },
+    "uniqueId": {
+      "type": "string"
+    },
+    "secUid": {
+      "type": "string"
+    },
+    "avatarUrl": {
+      "type": "string",
+      "format": "uri"
+    }
+  },
+  "required": [
+    "userId",
+    "nickname",
+    "uniqueId",
+    "secUid"
+  ],
+  "additionalProperties": false
+} as const;

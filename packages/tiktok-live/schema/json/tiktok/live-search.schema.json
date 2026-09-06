@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ttl-live.dev/schema/tiktok/live-search.schema.json",
+  "title": "TikTok Live Search Response",
+  "x-typescript-name": "TikTokLiveSearchResponse",
+  "type": "object",
+  "properties": {
+    "status_code": { "type": "integer" },
+    "status_msg": { "type": "string" },
+    "data": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "live_info": {
+            "type": "object",
+            "properties": {
+              "raw_data": { "type": "string" }
+            },
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

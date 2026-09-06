@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ttl-live.dev/schema/tiktok/room-info.schema.json",
+  "title": "TikTok Room Info Response",
+  "x-typescript-name": "TikTokRoomInfoResponse",
+  "type": "object",
+  "properties": {
+    "status_code": { "type": "integer" },
+    "data": {
+      "type": "object",
+      "properties": {
+        "message": { "type": "string" },
+        "id_str": { "$ref": "./common.schema.json#/$defs/id" },
+        "title": { "type": "string" },
+        "status": { "type": "integer" },
+        "user_count": { "$ref": "./common.schema.json#/$defs/count" },
+        "cover": { "$ref": "./common.schema.json#/$defs/image" },
+        "share_url": { "type": "string" },
+        "owner": {
+          "type": "object",
+          "properties": {
+            "id_str": { "$ref": "./common.schema.json#/$defs/id" },
+            "display_id": { "type": "string" },
+            "nickname": { "type": "string" },
+            "sec_uid": { "type": "string" },
+            "avatar_thumb": { "$ref": "./common.schema.json#/$defs/image" },
+            "follow_info": {
+              "type": "object",
+              "properties": {
+                "follower_count": { "$ref": "./common.schema.json#/$defs/count" }
+              },
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
+        },
+        "stats": {
+          "type": "object",
+          "properties": {
+            "total_user": { "$ref": "./common.schema.json#/$defs/count" },
+            "like_count": { "$ref": "./common.schema.json#/$defs/count" },
+            "comment_count": { "$ref": "./common.schema.json#/$defs/count" },
+            "share_count": { "$ref": "./common.schema.json#/$defs/count" },
+            "follow_count": { "$ref": "./common.schema.json#/$defs/count" }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "required": ["status_code"],
+  "additionalProperties": true
+}

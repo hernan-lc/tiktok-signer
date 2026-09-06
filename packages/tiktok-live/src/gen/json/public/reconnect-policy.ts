@@ -1,0 +1,39 @@
+// Generated file. Do not edit manually.
+// Source: schema/json/public/reconnect-policy.schema.json
+
+export type ReconnectPolicy = {
+  attempts: number;
+  initialMs: number;
+  maxMs: number;
+};
+
+export const ReconnectPolicySchema = {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ttl-live.dev/schema/public/reconnect-policy.schema.json",
+  "title": "ttl-live Reconnect Policy",
+  "x-typescript-name": "ReconnectPolicy",
+  "type": "object",
+  "properties": {
+    "attempts": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "initialMs": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "maxMs": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    }
+  },
+  "required": [
+    "attempts",
+    "initialMs",
+    "maxMs"
+  ],
+  "additionalProperties": false
+} as const;

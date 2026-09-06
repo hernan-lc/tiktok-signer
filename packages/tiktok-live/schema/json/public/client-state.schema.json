@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ttl-live.dev/schema/public/client-state.schema.json",
+  "title": "ttl-live Client State",
+  "x-typescript-name": "ClientState",
+  "type": "object",
+  "properties": {
+    "uniqueId": { "type": "string" },
+    "roomId": { "type": "string", "pattern": "^[0-9]*$" },
+    "connected": { "type": "boolean" },
+    "roomInfo": {
+      "anyOf": [
+        { "$ref": "./room-info.schema.json" },
+        { "type": "null" }
+      ]
+    },
+    "giftCount": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+  },
+  "required": ["uniqueId", "roomId", "connected", "roomInfo", "giftCount"],
+  "additionalProperties": false
+}

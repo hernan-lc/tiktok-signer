@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ttl-live.dev/schema/public/chat-event.schema.json",
+  "title": "ttl-live Chat Event",
+  "x-typescript-name": "ChatEvent",
+  "allOf": [
+    { "$ref": "./base-event.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "chat" },
+        "user": { "$ref": "./event-user.schema.json" },
+        "comment": { "type": "string" }
+      },
+      "required": ["type", "user", "comment"],
+      "additionalProperties": true,
+      "x-typescript-no-index": true
+    }
+  ]
+}

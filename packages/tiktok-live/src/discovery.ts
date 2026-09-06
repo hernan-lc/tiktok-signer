@@ -9,6 +9,27 @@
 // same set, and `test/discovery.test.ts` pins the parsing against recorded shapes.
 
 import { USER_AGENT } from './session.js';
+import { validateJson } from './json-validation.js';
+import {
+  TikTokGiftListResponseSchema,
+  type TikTokGiftListResponse,
+} from './gen/json/tiktok/gift-list.js';
+import {
+  TikTokLiveSearchResponseSchema,
+  type TikTokLiveSearchResponse,
+} from './gen/json/tiktok/live-search.js';
+import {
+  TikTokRoomInfoResponseSchema,
+  type TikTokRoomInfoResponse,
+} from './gen/json/tiktok/room-info.js';
+import {
+  TikTokRoomLookupResponseSchema,
+  type TikTokRoomLookupResponse,
+} from './gen/json/tiktok/room-lookup.js';
+import {
+  TikTokSearchRoomSchema,
+  type TikTokSearchRoom,
+} from './gen/json/tiktok/search-room.js';
 import type { Gift, LiveRoom, RoomInfo, RoomLookup } from './types.js';
 
 const WEBCAST_BASE = 'https://webcast.tiktok.com/webcast';
@@ -59,6 +80,13 @@ export class WebcastRefusal extends Error {
   }
 }
 
+/// Convert a JSON-boundary identifier without accepting a precision-unsafe number.
+export function parseId(value: unknown): string {
+  if (typeof value === 'string' && /^[0-9]+$/.test(value)) return value;
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return String(value);
+  throw new TypeError('invalid or precision-unsafe id');
+}
+
 /// Reads the unsigned endpoints.
 export class Discovery {
   cookie: string;
@@ -77,7 +105,11 @@ export class Discovery {
     this.cookie = cookie;
   }
 
-  async #json<T>(url: string): Promise<T> {
+  async #json<T>(
+    url: string,
+    endpoint: string,
+    validator: (value: unknown) => T,
+  ): Promise<T> {
     const response = await fetch(url, {
       headers: {
         'user-agent': this.userAgent,
@@ -87,17 +119,28 @@ export class Discovery {
       signal: AbortSignal.timeout(this.timeoutMs),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status} from ${new URL(url).pathname}`);
-    return response.json() as Promise<T>;
+    let raw: unknown;
+    try {
+      raw = await response.json();
+    } catch {
+      throw new TypeError(`Invalid ${endpoint}: $ expected valid JSON`);
+    }
+    return validator(raw);
   }
 
   /// `@handle` → room. Returns `{ uniqueId, roomId, nickname, status, title, isLive }`.
   async roomLookup(uniqueId: string): Promise<RoomLookup> {
-    const body = await this.#json<LookupResponse>(roomLookupUrl(uniqueId));
-    const user = body?.data?.user;
+    const endpoint = 'TikTok room lookup response';
+    const body = await this.#json<TikTokRoomLookupResponse>(
+      roomLookupUrl(uniqueId),
+      endpoint,
+      (raw) => validateJson<TikTokRoomLookupResponse>(raw, TikTokRoomLookupResponseSchema, endpoint),
+    );
+    const user = body.data?.user;
     if (!user) throw new Error(`no room data for @${strip(uniqueId)}`);
-    const liveRoom = body?.data?.liveRoom;
+    const liveRoom = body.data?.liveRoom;
     const status = user.status ?? liveRoom?.status ?? 0;
-    const roomId = String(user.roomId ?? '');
+    const roomId = user.roomId ? parseId(user.roomId) : '';
     return {
       uniqueId: user.uniqueId ?? strip(uniqueId),
       roomId,
@@ -110,13 +153,18 @@ export class Discovery {
 
   /// Room metadata: title, owner, counters.
   async roomInfo(roomId: string): Promise<RoomInfo> {
-    const body = await this.#json<RoomInfoResponse>(roomInfoUrl(roomId));
-    if (body?.status_code !== 0) throw new WebcastRefusal(body?.status_code ?? -1, body?.data?.message);
+    const endpoint = 'TikTok room info response';
+    const body = await this.#json<TikTokRoomInfoResponse>(
+      roomInfoUrl(roomId),
+      endpoint,
+      (raw) => validateJson<TikTokRoomInfoResponse>(raw, TikTokRoomInfoResponseSchema, endpoint),
+    );
+    if (body.status_code !== 0) throw new WebcastRefusal(body.status_code, body.data?.message);
     const data = body.data ?? {};
     const stats = data.stats ?? {};
     const owner = data.owner ?? {};
     return {
-      roomId: data.id_str ?? String(roomId),
+      roomId: data.id_str ?? roomId,
       title: data.title ?? '',
       status: data.status ?? 0,
       viewers: stats.total_user ?? data.user_count ?? 0,
@@ -143,12 +191,18 @@ export class Discovery {
   /// what turns a `gift` event into a diamond value when the event's own detail block is omitted,
   /// which happens on every repeat of a streak.
   async giftList(roomId: string): Promise<Map<string, Gift>> {
-    const body = await this.#json<GiftListResponse>(giftListUrl(roomId));
-    if (body?.status_code !== 0) throw new WebcastRefusal(body?.status_code ?? -1, body?.data?.message);
+    const endpoint = 'TikTok gift list response';
+    const body = await this.#json<TikTokGiftListResponse>(
+      giftListUrl(roomId),
+      endpoint,
+      (raw) => validateJson<TikTokGiftListResponse>(raw, TikTokGiftListResponseSchema, endpoint),
+    );
+    if (body.status_code !== 0) throw new WebcastRefusal(body.status_code, body.data?.message);
     const gifts = new Map<string, Gift>();
     for (const gift of body.data?.gifts ?? []) {
-      gifts.set(String(gift.id), {
-        id: String(gift.id),
+      const id = parseId(gift.id);
+      gifts.set(id, {
+        id,
         name: gift.name ?? '',
         describe: gift.describe ?? '',
         diamondCount: gift.diamond_count ?? 0,
@@ -168,29 +222,44 @@ export class Discovery {
   /// entry's real content is a JSON *string* under `live_info.raw_data` — the search response
   /// carries the room object serialised inside itself, which is why the outer fields look empty.
   async liveChannels(keyword = 'live'): Promise<LiveRoom[]> {
-    const body = await this.#json<LiveSearchResponse>(liveSearchUrl(keyword));
+    const endpoint = 'TikTok live search response';
+    const body = await this.#json<TikTokLiveSearchResponse>(
+      liveSearchUrl(keyword),
+      endpoint,
+      (raw) => validateJson<TikTokLiveSearchResponse>(raw, TikTokLiveSearchResponseSchema, endpoint),
+    );
     // Search is the one unsigned endpoint that wants a session: without one it answers 200 with
     // `status_code: 2483, "Please login your account first"`, which as an empty list would look
     // like "nobody is live".
-    if (body?.status_code) throw new WebcastRefusal(body.status_code, body.status_msg);
+    if (body.status_code) throw new WebcastRefusal(body.status_code, body.status_msg);
     const rooms: LiveRoom[] = [];
-    for (const item of body?.data ?? []) {
-      let room: SearchRoom;
+    for (const item of body.data ?? []) {
+      const rawData = item.live_info?.raw_data;
+      if (!rawData) continue;
+      let rawRoom: unknown;
       try {
-        room = JSON.parse(item.live_info?.raw_data ?? '') as SearchRoom;
+        rawRoom = JSON.parse(rawData);
       } catch {
         continue;
       }
-      if (room?.status !== ROOM_STATUS_LIVE) continue;
-      const uniqueId = room?.owner?.display_id ?? '';
-      const roomId = String(room?.id_str ?? '');
+      let room: TikTokSearchRoom;
+      try {
+        room = validateJson<TikTokSearchRoom>(rawRoom, TikTokSearchRoomSchema, 'TikTok live search room');
+      } catch {
+        // Search results are a mixed, unstable feed. Ignore one malformed room while preserving
+        // the valid rooms in the same response.
+        continue;
+      }
+      if (room.status !== ROOM_STATUS_LIVE || !room.id_str) continue;
+      const uniqueId = room.owner?.display_id ?? '';
+      const roomId = parseId(room.id_str);
       if (!uniqueId || !roomId || roomId === '0') continue;
       rooms.push({
         uniqueId,
         roomId,
-        nickname: room?.owner?.nickname ?? '',
-        title: room?.title ?? '',
-        viewers: Number(room?.user_count ?? 0),
+        nickname: room.owner?.nickname ?? '',
+        title: room.title ?? '',
+        viewers: room.user_count ?? 0,
       });
     }
     rooms.sort((left, right) => right.viewers - left.viewers);
@@ -207,62 +276,3 @@ export interface DiscoveryOptions {
 }
 
 interface Image { url_list?: string[] }
-interface LookupResponse {
-  data?: {
-    user?: { uniqueId?: string; roomId?: string | number; nickname?: string; status?: number };
-    liveRoom?: { status?: number; title?: string };
-  };
-}
-interface OwnerResponse {
-  id_str?: string;
-  display_id?: string;
-  nickname?: string;
-  sec_uid?: string;
-  avatar_thumb?: Image;
-  follow_info?: { follower_count?: number };
-}
-interface RoomInfoResponse {
-  status_code?: number;
-  data?: {
-    message?: string;
-    id_str?: string;
-    title?: string;
-    status?: number;
-    user_count?: number;
-    cover?: Image;
-    share_url?: string;
-    owner?: OwnerResponse;
-    stats?: {
-      total_user?: number;
-      like_count?: number;
-      comment_count?: number;
-      share_count?: number;
-      follow_count?: number;
-    };
-  };
-}
-interface GiftResponse {
-  id: string | number;
-  name?: string;
-  describe?: string;
-  diamond_count?: number;
-  combo?: boolean;
-  type?: number;
-  icon?: Image;
-}
-interface GiftListResponse {
-  status_code?: number;
-  data?: { message?: string; gifts?: GiftResponse[] };
-}
-interface SearchRoom {
-  status?: number;
-  id_str?: string;
-  title?: string;
-  user_count?: number;
-  owner?: { display_id?: string; nickname?: string };
-}
-interface LiveSearchResponse {
-  status_code?: number;
-  status_msg?: string;
-  data?: Array<{ live_info?: { raw_data?: string } }>;
-}

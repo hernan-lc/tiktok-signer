@@ -19,6 +19,7 @@ import {
   IDENTITY, PATH, SOCKET_HOST, enterRoomFrame, heartbeatFrame, socketConfig, socketQuery,
 } from './player.js';
 import { PRODUCT, Signer } from './signer.js';
+import type { Product } from './signer.js';
 import {
   GuestSessionError, USER_AGENT, bootstrapGuestSession, cookieHeader, parseCookies, sessionJar,
 } from './session.js';
@@ -90,7 +91,7 @@ export interface TikTokLiveOptions {
 }
 
 export interface SignerLike {
-  sign(url: string, product?: (typeof PRODUCT)[keyof typeof PRODUCT]): string;
+  sign(url: string, product?: Product): string;
 }
 
 interface ResolvedOptions {
@@ -427,8 +428,12 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     // The batch owns the transport's heartbeat hint. Keep it as generated bigint until this
     // application boundary, then clamp it to the range accepted by Node's timers.
     if (batch.heartbeatDuration > 0n) {
-      const heartbeatMs = Math.min(Number(batch.heartbeatDuration), MAX_HEARTBEAT_MS);
-      if (Number.isFinite(heartbeatMs) && heartbeatMs > 0) this.#startHeartbeat(heartbeatMs);
+      const maxHeartbeat = BigInt(MAX_HEARTBEAT_MS);
+      const boundedHeartbeat = batch.heartbeatDuration > maxHeartbeat
+        ? maxHeartbeat
+        : batch.heartbeatDuration;
+      const heartbeatMs = Number(boundedHeartbeat);
+      if (heartbeatMs > 0) this.#startHeartbeat(heartbeatMs);
     }
 
     // Acknowledge before decoding events, not after: an unacknowledged frame stops the push a few
@@ -454,7 +459,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   /// price come from the room's gift table. Also attach icon URL for renderer.
   #enrich(event: LiveEvent): LiveEvent {
     if (event.type !== EVENT.gift) return event;
-    const gift = this.gifts.get(String(event.giftId));
+    const gift = this.gifts.get(event.giftId);
     if (!gift) return event;
     return {
       ...event,

@@ -14,8 +14,9 @@
 
 export { TikTokLive, DEFAULT_RECONNECT, NotLiveError, cookieFromFile } from './client.js';
 export type { SignerLike, TikTokLiveEvents, TikTokLiveOptions } from './client.js';
-export { Discovery, WebcastRefusal, ROOM_STATUS_LIVE } from './discovery.js';
-export { EVENT, METHOD, SOCIAL_ACTION, decodeEvent, decodeUser, label } from './events.js';
+export { Discovery, WebcastRefusal, ROOM_STATUS_LIVE, parseId } from './discovery.js';
+export { EVENT, METHOD, SOCIAL_ACTION, decodeEvent, decodeUser, label, safeCount } from './events.js';
+export { JsonValidationError } from './json-validation.js';
 export { Signer, PRODUCT, BUNDLE_SHA256, BUNDLE_URL, loadBundle } from './signer.js';
 export {
   GUEST_BOOTSTRAP_URL,
@@ -42,6 +43,14 @@ export {
   frameHeaders,
 } from './frames.js';
 export { IDENTITY, SOCKET_HOST, PATH, socketConfig, socketQuery } from './player.js';
-export type { BrowserBlockOptions, Compression, Identity, SocketConfig, SocketConfigOptions } from './player.js';
+export type {
+  BrowserBlockOptions,
+  Compression,
+  Identity,
+  QueryPrimitive,
+  QueryValue,
+  SocketConfig,
+  SocketConfigOptions,
+} from './player.js';
 export type { LoadBundleOptions, Product, SignerOptions } from './signer.js';
 export type * from './types.js';

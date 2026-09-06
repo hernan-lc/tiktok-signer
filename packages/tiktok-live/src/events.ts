@@ -58,10 +58,19 @@ export const EVENT = Object.freeze({
 
 // --- generated message adapters ----------------------------------------------------------------
 
-/// Convert generated signed protobuf integers to the package's non-negative count convention.
-function asCount(value: bigint | number): number {
+/// Convert a generated protobuf count without silently losing precision.
+///
+/// Counts are exposed as numbers for compatibility with the listener API. Values outside the
+/// safe integer range are intentionally clamped, while negative values normalize to zero.
+export function safeCount(value: bigint | number): number {
+  if (typeof value === 'number' && !Number.isInteger(value)) {
+    throw new RangeError('protobuf counts must be integers');
+  }
   const integer = typeof value === 'bigint' ? value : BigInt(value);
-  return integer > 0n ? Number(integer) : 0;
+  if (integer <= 0n) return 0;
+  const maximum = BigInt(Number.MAX_SAFE_INTEGER);
+  if (integer > maximum) return Number.MAX_SAFE_INTEGER;
+  return Number(integer);
 }
 
 /// Generated int64 values remain bigint until this explicit public boundary.
@@ -100,9 +109,9 @@ export const label = (user: EventUser): string => user.uniqueId || user.nickname
 
 function normalizeContributor(contributor: Contributor): TopViewer {
   return {
-    rank: asCount(contributor.rank),
-    score: asCount(contributor.score),
-    delta: asCount(contributor.delta),
+    rank: safeCount(contributor.rank),
+    score: safeCount(contributor.score),
+    delta: safeCount(contributor.delta),
     user: normalizeUser(contributor.user),
   };
 }
@@ -110,7 +119,14 @@ function normalizeContributor(contributor: Contributor): TopViewer {
 /// `WebcastSocialMessage.action`, which is how a follow and a share arrive on the same message.
 export const SOCIAL_ACTION = Object.freeze({ follow: 1, share: 3 });
 
-type Normalizer = (payload: Uint8Array) => object;
+type NormalizedEvent =
+  | Omit<ChatEvent, 'method'>
+  | Omit<GiftEvent, 'method'>
+  | Omit<LikeEvent, 'method'>
+  | Omit<MemberEvent, 'method'>
+  | Omit<SocialEvent, 'method'>
+  | Omit<RoomUserEvent, 'method'>;
+type Normalizer = (payload: Uint8Array) => NormalizedEvent;
 
 const NORMALIZE: Record<string, Normalizer> = {
   [METHOD.chat]: (payload) => {
@@ -131,9 +147,9 @@ const NORMALIZE: Record<string, Normalizer> = {
       toUser: normalizeUser(message.toUser),
       giftId: asId(message.giftId),
       giftName: message.gift?.name ?? '',
-      diamondCount: asCount(message.gift?.diamondCount ?? 0),
-      repeatCount: asCount(message.repeatCount),
-      comboCount: asCount(message.comboCount),
+      diamondCount: safeCount(message.gift?.diamondCount ?? 0),
+      repeatCount: safeCount(message.repeatCount),
+      comboCount: safeCount(message.comboCount),
       groupId: asId(message.groupId),
       /// A streak sends one message per gift; only the last one is final. Counting the others
       /// double-counts diamonds, which is the classic bug in a gift tally.
@@ -145,8 +161,8 @@ const NORMALIZE: Record<string, Normalizer> = {
     return {
       type: EVENT.like,
       user: normalizeUser(message.user),
-      count: asCount(message.count),
-      total: asCount(message.total),
+      count: safeCount(message.count),
+      total: safeCount(message.total),
     } satisfies Omit<LikeEvent, 'method'>;
   },
   [METHOD.member]: (payload) => {
@@ -154,8 +170,8 @@ const NORMALIZE: Record<string, Normalizer> = {
     return {
       type: EVENT.member,
       user: normalizeUser(message.user),
-      memberCount: asCount(message.memberCount),
-      action: asCount(message.action),
+      memberCount: safeCount(message.memberCount),
+      action: safeCount(message.action),
     } satisfies Omit<MemberEvent, 'method'>;
   },
   [METHOD.social]: (payload) => {
@@ -163,9 +179,9 @@ const NORMALIZE: Record<string, Normalizer> = {
     return {
       type: EVENT.social,
       user: normalizeUser(message.user),
-      action: asCount(message.action),
-      followCount: asCount(message.followCount),
-      shareCount: asCount(message.shareCount),
+      action: safeCount(message.action),
+      followCount: safeCount(message.followCount),
+      shareCount: safeCount(message.shareCount),
     } satisfies Omit<SocialEvent, 'method'>;
   },
   [METHOD.roomUser]: (payload) => {
@@ -173,10 +189,10 @@ const NORMALIZE: Record<string, Normalizer> = {
     const ranks = message.ranks.map(normalizeContributor);
     return {
       type: EVENT.roomUser,
-      viewers: asCount(message.total),
-      popularity: asCount(message.popularity),
-      totalUser: asCount(message.totalUser),
-      anonymous: asCount(message.anonymous),
+      viewers: safeCount(message.total),
+      popularity: safeCount(message.popularity),
+      totalUser: safeCount(message.totalUser),
+      anonymous: safeCount(message.anonymous),
       // Preserve the existing public API, which exposes the ranking under both names.
       topViewers: ranks,
       rankedViewers: ranks,
@@ -197,7 +213,7 @@ export function decodeEvent(method: string, payload: Uint8Array): LiveEvent {
   const normalize = NORMALIZE[method];
   if (!normalize) return { type: EVENT.unknown, method, payload };
   try {
-    return { ...normalize(payload), method } as LiveEvent;
+    return { ...normalize(payload), method };
   } catch {
     return { type: EVENT.unknown, method, payload };
   }

@@ -191,12 +191,15 @@ interface SignerAnswer {
 
 function parseAnswer(encoded: string): SignerAnswer {
   const value: unknown = JSON.parse(encoded);
-  if (!value || typeof value !== 'object') {
+  if (!isRecord(value)) {
     throw new Error('the signer returned a malformed response');
   }
-  const answer = value as Record<string, unknown>;
   return {
-    ...(typeof answer.error === 'string' ? { error: answer.error } : {}),
-    ...(typeof answer.signed === 'string' ? { signed: answer.signed } : {}),
+    ...(typeof value.error === 'string' ? { error: value.error } : {}),
+    ...(typeof value.signed === 'string' ? { signed: value.signed } : {}),
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
