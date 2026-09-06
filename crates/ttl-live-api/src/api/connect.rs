@@ -80,7 +80,7 @@ pub async fn metrics(State(service): State<Arc<ConnectService>>) -> Response {
     response
 }
 
-fn connect_response(response: ConnectResponse, request_id: u64) -> Response {
+pub(crate) fn connect_response(response: ConnectResponse, request_id: u64) -> Response {
     let mut response = (StatusCode::OK, Json(response)).into_response();
     add_request_id(response.headers_mut(), request_id);
     response

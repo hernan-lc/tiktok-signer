@@ -10,8 +10,18 @@ socket. The Node SDK uses the returned Cookie/User-Agent metadata to connect dir
 
 ## Run
 
-The binary reads the signing bundle at `SIGNING_BUNDLE` (or `TTL_BUNDLE`), defaulting to
-`webmssdk.js` in the working directory. An existing session can be supplied with
+The binary takes CLI flags, with environment variables as fallback and built-in defaults last
+(flags > env > defaults). The bundle defaults to `./webmssdk.js`; relative paths resolve
+against the current working directory:
+
+```powershell
+# easiest for local debugging — no env setup
+cargo run -p ttl-live-api -- --bundle ./webmssdk.js --bind 127.0.0.1:8080
+cargo run -p ttl-live-api -- --help
+```
+
+The env equivalents are `SIGNING_BUNDLE` (or `TTL_BUNDLE`), `HTTP_BIND`, and `API_KEYS`.
+An existing session can be supplied with
 `TTL_SESSION_COOKIE` or `TTL_SESSION_FILE`; otherwise the service bootstraps one anonymous web
 identity at startup.
 
@@ -49,3 +59,24 @@ The SDK package is Node.js-first because the direct handshake needs Cookie and U
 It accepts only a unique ID, reuses the repository's generated protobufs and frame helpers, ACKs
 push batches before emitting normalized events, and obtains a fresh broker descriptor for every
 reconnect.
+
+## Browser check (Bun, HTML only)
+
+`examples/live-sdk-bun/` is a single page served directly by Bun with no JS server: the only
+backend is this Rust broker. The page reads the unique ID from its own query string, fetches a
+ticket from `POST /v1/connect`, then opens the broker's WebSocket relay at
+`GET /v1/live?uniqueId=` and reports everything with `console.log`/`console.error` only:
+
+```powershell
+bun install --cwd examples/live-sdk-bun
+bun ./examples/live-sdk-bun/index.html --console
+# open http://localhost:3000/?uniqueId=@creator
+```
+
+`--console` mirrors the browser logs into the terminal. A page socket cannot set the
+Cookie/User-Agent headers TikTok demands (a direct browser socket dies with an immediate
+1006), so `/v1/live` dials TikTok with the ticket headers and pipes raw frames both ways —
+the page still owns the protocol (enter-room, heartbeats, ACKs, decode). Offline creators
+answer the relay with the same JSON contract as `/v1/connect`, so no socket is opened for
+them. The broker stamps permissive CORS headers so the page can reach it cross-origin; it
+binds loopback by default and should not be exposed publicly with those headers.

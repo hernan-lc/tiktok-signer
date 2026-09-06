@@ -86,6 +86,59 @@ fn live_service() -> Arc<ConnectService> {
     )
 }
 
+fn offline_service() -> Arc<ConnectService> {
+    let config = AppConfig {
+        connect_requests_per_minute: 10_000,
+        unique_creators_per_minute: 10_000,
+        ..AppConfig::default()
+    };
+    ConnectService::new(
+        Arc::new(Resolver {
+            value: RoomResolution::Offline {
+                room_id: None,
+                status: 0,
+                nickname: String::new(),
+            },
+        }),
+        Arc::new(Signer),
+        config,
+    )
+}
+
+async fn get(app: axum::Router, uri: &str) -> axum::response::Response {
+    app.oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn relay_offline_answers_json_without_an_upgrade() {
+    let response = get(router(offline_service()), "/v1/live?uniqueId=creator").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(body["uniqueId"], "creator");
+    assert_eq!(body["status"], "offline");
+}
+
+#[tokio::test]
+async fn relay_rejects_invalid_unique_ids_with_the_common_error_shape() {
+    let response = get(router(live_service()), "/v1/live?uniqueId=@@nope").await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(body["error"]["code"], "INVALID_UNIQUE_ID");
+}
+
+#[tokio::test]
+async fn relay_live_without_upgrade_headers_demands_an_upgrade() {
+    let response = get(router(live_service()), "/v1/live?uniqueId=creator").await;
+    assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED);
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(body["error"]["code"], "UPGRADE_REQUIRED");
+}
+
 #[tokio::test]
 async fn live_contract_accepts_only_unique_id_and_returns_descriptor() {
     let response = request(
@@ -105,6 +158,39 @@ async fn live_contract_accepts_only_unique_id_and_returns_descriptor() {
         .as_str()
         .unwrap()
         .starts_with("wss://"));
+}
+
+#[tokio::test]
+async fn browser_preflight_is_answered_with_allow_headers() {
+    let response = request(router(live_service()), "OPTIONS", "/v1/connect", "")
+        .await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let headers = response.headers();
+    assert_eq!(
+        headers.get("access-control-allow-origin").map(|v| v.to_str().unwrap()),
+        Some("*"),
+    );
+    assert!(headers.contains_key("access-control-allow-methods"));
+    assert!(headers.contains_key("access-control-allow-headers"));
+}
+
+#[tokio::test]
+async fn connect_responses_carry_cors_headers_for_browser_clients() {
+    let response = request(
+        router(live_service()),
+        "POST",
+        "/v1/connect",
+        r#"{"uniqueId":"@creator"}"#,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .map(|v| v.to_str().unwrap()),
+        Some("*"),
+    );
 }
 
 #[tokio::test]

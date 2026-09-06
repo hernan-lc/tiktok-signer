@@ -26,3 +26,7 @@
 
 # The raw capture store: a signed URL is a replayable capability, never committed.
 /.local/
+
+# Downloaded TikTok signing bundle (see docs/15-direct-live-api.md). Fetch it with:
+# curl -fsS -o webmssdk.js https://sf16-website-login.neutral.ttwstatic.com/obj/tiktok_web_login_static/webmssdk/1.0.0.388/webmssdk.js
+/webmssdk.js

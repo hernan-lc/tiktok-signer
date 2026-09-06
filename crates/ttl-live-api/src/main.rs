@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use tracing::info;
+use ttl_live_api::cli::{CliArgs, CliExit, HELP};
 use ttl_live_api::identity::bootstrap_guest_identity;
 use ttl_live_api::service::{BackendSigner, DiscoveryResolver};
 use ttl_live_api::{router, AppConfig, ConnectService};
@@ -20,7 +21,19 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let config = AppConfig::from_env();
+    let cli = match CliArgs::parse() {
+        Ok(cli) => cli,
+        Err(CliExit::Help) => {
+            println!("{HELP}");
+            return Ok(());
+        }
+        Err(CliExit::Error(message)) => {
+            eprintln!("error: {message}\n\n{HELP}");
+            std::process::exit(2);
+        }
+    };
+    // Explicit flags win; anything unset falls back to env, then built-in defaults.
+    let config = cli.apply(AppConfig::from_env());
     let preset = Preset::new(
         DevicePreset::chrome_linux(),
         LocationPreset::us_east(),
@@ -41,7 +54,7 @@ async fn main() -> Result<()> {
         }
     };
 
-    let bundle_path = bundle_path();
+    let bundle_path = cli.bundle_path();
     let source = std::fs::read_to_string(&bundle_path)
         .with_context(|| format!("could not read signing bundle at {}", bundle_path.display()))?;
     let profile = Profile {
@@ -77,13 +90,6 @@ async fn main() -> Result<()> {
         })
         .await
         .context("HTTP server stopped unexpectedly")
-}
-
-fn bundle_path() -> PathBuf {
-    std::env::var_os("SIGNING_BUNDLE")
-        .or_else(|| std::env::var_os("TTL_BUNDLE"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("webmssdk.js"))
 }
 
 fn load_session() -> Option<CookieJar> {

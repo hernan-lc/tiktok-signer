@@ -127,7 +127,7 @@ fn env_usize(name: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
-fn parse_api_keys(raw: Option<&str>) -> HashMap<String, String> {
+pub(crate) fn parse_api_keys(raw: Option<&str>) -> HashMap<String, String> {
     let mut keys = HashMap::new();
     for item in raw.unwrap_or_default().split(',') {
         let item = item.trim();

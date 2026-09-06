@@ -3,13 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Bun + HTML console-log check for the direct TikTok LIVE SDK. uniqueId comes from the page query string.",
+  "description": "HTML-only console-log check for the direct TikTok LIVE broker. uniqueId comes from the page query string. Served directly by Bun, no app server.",
   "scripts": {
-    "start": "bun run server.ts",
-    "dev": "bun --hot run server.ts"
+    "start": "bun ./index.html --console"
   },
   "dependencies": {
-    "@bufbuild/protobuf": "^2.14.1",
-    "ws": "^8.18.0"
+    "@bufbuild/protobuf": "^2.14.1"
   }
 }

@@ -6,62 +6,17 @@
     <title>live-sdk bun check — console only</title>
   </head>
   <body>
-    <script type="module">
-      // Console-only check page. The uniqueId is taken from the page query string:
-      //   http://127.0.0.1:3000/?uniqueId=@creator
-      // All LIVE traffic is relayed by the Bun server (see server.ts) as SSE;
-      // everything below is reported with console.log / console.error only.
-      const params = new URLSearchParams(location.search);
-      const uniqueId =
-        params.get("uniqueId") ??
-        params.get("unique_id") ??
-        params.get("id") ??
-        params.get("handle") ??
-        "";
+    <!--
+      HTML-only check, served directly by Bun with no app server:
+        bun install --cwd examples/live-sdk-bun
+        bun ./examples/live-sdk-bun/index.html --console
+      Then open http://localhost:3000/?uniqueId=@creator
+      (`--console` mirrors browser console.log/error into the terminal.)
 
-      const passthrough = new URLSearchParams();
-      if (uniqueId) passthrough.set("uniqueId", uniqueId);
-      for (const key of ["apiUrl", "apiKey", "gifts"]) {
-        const value = params.get(key);
-        if (value !== null && value !== "") passthrough.set(key, value);
-      }
-
-      console.log("[live-sdk] page", location.href);
-      console.log("[live-sdk] query uniqueId", uniqueId || "(missing)");
-
-      if (!uniqueId) {
-        console.error(
-          "[live-sdk] missing uniqueId query param. Use /?uniqueId=@creator",
-        );
-      } else {
-        const streamUrl = `/api/stream?${passthrough.toString()}`;
-        console.log("[live-sdk] connecting", streamUrl);
-
-        const source = new EventSource(streamUrl);
-
-        source.onopen = () => {
-          console.log("[live-sdk] stream open", { uniqueId });
-        };
-
-        source.onmessage = (message) => {
-          let data = message.data;
-          try {
-            data = JSON.parse(message.data);
-          } catch {
-            // Keep raw string payloads as-is.
-          }
-          console.log("[live-sdk]", data);
-        };
-
-        source.onerror = (event) => {
-          console.error("[live-sdk] stream error", {
-            readyState: source.readyState,
-            event: String(event?.type ?? "error"),
-          });
-        };
-
-        addEventListener("beforeunload", () => source.close());
-      }
-    </script>
+      The uniqueId comes from the page query string (?uniqueId=@creator,
+      aliases: unique_id, id, handle). Optional: ?apiUrl= (default
+      http://127.0.0.1:8080), ?apiKey=. All output is console.log/error only.
+    -->
+    <script type="module" src="./live.ts"></script>
   </body>
 </html>
