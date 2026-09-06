@@ -1,0 +1,2 @@
+# protoc-gen-es emits a final blank line in generated TypeScript files.
+packages/tiktok-live/src/gen/** whitespace=-blank-at-eof

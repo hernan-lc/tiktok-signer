@@ -20,6 +20,11 @@ Schemas are never fetched at build time. To move the pin:
 scripts/update-tiktok-protos.sh <commit>
 ```
 
+The Node package generates its TypeScript bindings directly from this same original tree with
+`protoc-gen-es`. The two compatibility renames in `build.rs` are only needed for Rust identifier
+collisions during Prost generation; they are not applied to the vendored files or to TypeScript
+generation.
+
 ## Licensing — read before redistributing
 
 The rest of this workspace is MIT. **These schemas are not.**

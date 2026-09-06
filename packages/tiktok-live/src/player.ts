@@ -7,8 +7,9 @@
 //
 // Nothing here is invented. Every value is read out of the player's own chunk, and
 // `player-audit.mjs` re-reads them from the shipped app on demand and fails when they move. The
-// numbers in `PUSH_FRAME_FIELD` and friends are the protobuf field ids from the SDK's descriptors,
-// named rather than spelled inline, because a bare `6` in an encoder is unreviewable.
+// numbers in `PUSH_FRAME_FIELD` and friends come from the generated protobuf descriptors (the
+// same field ids used by the SDK), named rather than spelled inline, because a bare `6` in an
+// encoder is unreviewable.
 //
 // `crates/ttl-sign-core/src/params.rs` is the Rust statement of the same thing, and the two are held
 // together by a test rather than by discipline: `TTL_PRINT_QUERY=1 node ws-direct.mjs` prints the
@@ -16,6 +17,11 @@
 // produces it byte for byte.
 
 import { USER_AGENT } from './session.js';
+import {
+  HeartBeatMessageSchema,
+  WebcastImEnterRoomMessageSchema,
+  WebcastPushFrameSchema,
+} from './gen/webcast/synthetic_proto_pb.js';
 
 /// Socket hosts, by cluster region. The player picks between exactly these three.
 export const SOCKET_HOST = Object.freeze({
@@ -71,16 +77,33 @@ const PAYLOAD_ENCODING_PB = 'pb';
 // --- protobuf field numbers, from the SDK's own descriptors ---------------------------------------
 
 export const PUSH_FRAME_FIELD = Object.freeze({
-  seqId: 1, logId: 2, service: 3, method: 4, headers: 5,
-  payloadEncoding: 6, payloadType: 7, payload: 8,
+  seqId: WebcastPushFrameSchema.field.seqId.number,
+  logId: WebcastPushFrameSchema.field.logId.number,
+  service: WebcastPushFrameSchema.field.service.number,
+  method: WebcastPushFrameSchema.field.method.number,
+  headers: WebcastPushFrameSchema.field.headers.number,
+  payloadEncoding: WebcastPushFrameSchema.field.payloadEncoding.number,
+  payloadType: WebcastPushFrameSchema.field.payloadType.number,
+  payload: WebcastPushFrameSchema.field.payload.number,
 });
 
 export const ENTER_ROOM_FIELD = Object.freeze({
-  roomId: 1, roomTag: 2, liveRegion: 3, liveId: 4, identity: 5, cursor: 6,
-  accountType: 7, enterUniqId: 8, filterWelcomeMsg: 9, isAnchorContinueKeepMsg: 10,
+  roomId: WebcastImEnterRoomMessageSchema.field.roomId.number,
+  roomTag: WebcastImEnterRoomMessageSchema.field.roomTag.number,
+  liveRegion: WebcastImEnterRoomMessageSchema.field.liveRegion.number,
+  liveId: WebcastImEnterRoomMessageSchema.field.liveId.number,
+  identity: WebcastImEnterRoomMessageSchema.field.identity.number,
+  cursor: WebcastImEnterRoomMessageSchema.field.cursor.number,
+  accountType: WebcastImEnterRoomMessageSchema.field.accountType.number,
+  enterUniqId: WebcastImEnterRoomMessageSchema.field.enterUniqueId.number,
+  filterWelcomeMsg: WebcastImEnterRoomMessageSchema.field.filterWelcomeMsg.number,
+  isAnchorContinueKeepMsg: WebcastImEnterRoomMessageSchema.field.isAnchorContinueKeepMsg.number,
 });
 
-export const HEARTBEAT_FIELD = Object.freeze({ roomId: 1, sendPacketSeqId: 2 });
+export const HEARTBEAT_FIELD = Object.freeze({
+  roomId: HeartBeatMessageSchema.field.roomId.number,
+  sendPacketSeqId: HeartBeatMessageSchema.field.sendPacketSeqId.number,
+});
 
 const WIRE_VARINT = 0;
 const WIRE_LENGTH_DELIMITED = 2;

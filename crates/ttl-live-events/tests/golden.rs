@@ -1,8 +1,8 @@
 //! Golden tests: Node and Rust must normalise the same bytes identically.
 //!
 //! The expected JSON is produced by `examples/node-connector/golden-fixtures.ts`
-//! using `tiktok-live-proto/v3` — the same package the modern Node connector
-//! uses. Nothing here shells out to Node; the files are committed.
+//! using the checked-in TypeScript `protoc-gen-es` bindings from the same
+//! vendored schema tree. Nothing here shells out to Node; the files are committed.
 //!
 //! Every number is compared as a string. TikTok ids exceed 2^53, so a JSON
 //! number would lose precision on the Node side and make the comparison lie.

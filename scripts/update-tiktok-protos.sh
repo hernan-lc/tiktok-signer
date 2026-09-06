@@ -86,8 +86,10 @@ Pinned $commit.
 
 Next:
   1. git diff -- crates/ttl-live-proto/proto   # review schema changes
-  2. regenerate the Node goldens if normalisers changed:
+  2. regenerate the TypeScript protobuf bindings:
+       cd packages/tiktok-live && npm run proto:generate
+  3. regenerate the Node goldens if normalisers changed:
        cd examples/node-connector && npx tsx golden-fixtures.ts
-  3. cargo fmt && cargo test --workspace
-  4. commit
+  4. cargo fmt && cargo test --workspace
+  5. commit
 EOF

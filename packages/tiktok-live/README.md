@@ -27,8 +27,8 @@ The Rust side of this repository does link QuickJS or V8, but only because Rust 
 its own. Shipping that through `napi` would put a JavaScript engine inside a JavaScript runtime and
 add a prebuilt binary per platform, in exchange for nothing.
 
-Everything else — discovery, the WebSocket, protobuf, gzip — is Node built-ins and about 700 lines
-here. **This package has no runtime dependencies.**
+Everything else — discovery, the WebSocket, protobuf transport, and gzip — is Node built-ins and
+about 700 lines here. Generated schema bindings use the small `@bufbuild/protobuf` runtime.
 
 ## What it does
 
@@ -97,6 +97,22 @@ npm run listen -- @someone # live, against a room that is broadcasting now
 
 `test/signer.test.ts` also checks that `vendor/bootstrap.js` still matches the shim it is
 generated from — run `npm run sync-bootstrap` after editing `scripts/headless/shim.mjs`.
+
+## Generated protobuf schemas
+
+The complete TypeScript schema bindings under `src/gen/` are generated from the same vendored
+`.proto` tree used by Rust:
+
+```sh
+npm install
+npm run proto:generate
+npm run proto:check       # regenerate, then fail if src/gen is stale
+```
+
+The generator reads only `crates/ttl-live-proto/proto/v3/`; it does not download schemas during a
+build. Generated files are not hand-edited. The event and frame decoders consume these generated
+schemas directly. They intentionally remain separate from the package's normalized runtime event
+types, which form the stable listener-facing API.
 
 ## Authorized use only
 

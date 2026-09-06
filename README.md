@@ -84,8 +84,8 @@ behind it are `cargo test -p ttl-sign-embedded --features v8`, and the measureme
 ### From Node, without any of this
 
 [`packages/tiktok-live`](packages/tiktok-live/README.md) is the whole flow as a Node library —
-discovery, signing, socket, protobuf, reconnect — with **no server, no native module and no
-runtime dependencies**:
+discovery, signing, socket, protobuf, reconnect — with **no server, no native module and only a
+small protobuf runtime dependency**:
 
 ```js
 import { TikTokLive, label } from 'ttl-live';
@@ -294,6 +294,10 @@ When `is_known()` is `false`, TikTok shipped a message type newer than the pinne
 event is still decoded — fields keep their wire numbers and values, only the names are
 missing, which `live-check` shows as `#1=<60 bytes>`. To name them, move the pin with
 `scripts/update-tiktok-protos.sh <commit>`.
+
+The Node package also generates and uses TypeScript bindings from the same vendored tree. After an
+explicit schema update, run `cd packages/tiktok-live && npm run proto:generate`; generation never
+downloads schemas at build time.
 
 ### Schema coverage
 

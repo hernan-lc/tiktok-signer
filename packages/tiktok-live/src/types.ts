@@ -1,3 +1,9 @@
+// Stable listener-facing application types.
+//
+// These are intentionally not protobuf schema types: generated v3 messages under `gen/` model
+// TikTok's wire layout, while these types model the small normalized API exposed by this package.
+// Keeping this adapter boundary prevents schema churn from becoming a public API change.
+
 export interface EventUser {
   /** 64-bit id as a decimal string: it exceeds `Number.MAX_SAFE_INTEGER`. */
   userId: string;

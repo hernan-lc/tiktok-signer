@@ -1,0 +1,15 @@
+version: v2
+
+# The checked-in TikTok schema tree is the input for both Rust/prost and this
+# TypeScript/protobuf-es generation. No schema is downloaded during generation.
+clean: true
+
+inputs:
+  - directory: crates/ttl-live-proto/proto/v3
+
+plugins:
+  - local: protoc-gen-es
+    out: packages/tiktok-live/src/gen
+    opt:
+      - target=ts
+      - import_extension=js

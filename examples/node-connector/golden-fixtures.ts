@@ -1,10 +1,10 @@
 // Golden oracle for the Rust event decoder.
 //
 // Node and Rust must agree on the wire format because they read the *same*
-// `.proto` sources: this script uses `tiktok-live-proto/v3` (the package the
-// modern connector uses), while Rust generates Prost bindings from the schemas
-// vendored in `crates/ttl-live-proto/proto/v3`. Node is a test-time oracle only
-// — nothing in the Rust runtime shells out to it.
+// `.proto` sources: this script uses the local `protoc-gen-es` bindings generated
+// from `crates/ttl-live-proto/proto/v3`, while Rust generates Prost bindings from
+// that same tree. Node is a test-time oracle only — nothing in the Rust runtime
+// shells out to it.
 //
 //   npx tsx golden-fixtures.ts        # from examples/node-connector
 //
@@ -18,7 +18,7 @@
 //   cargo run -p ttl-live-events --example make-fixtures -- fixtures/events
 //
 // so this script decoding them at all is itself the cross-implementation check:
-// Rust (prost) encodes, Node (@bufbuild/protobuf) decodes, and vice versa.
+// Rust (prost) encodes, Node (the checked-in protoc-gen-es bindings) decodes, and vice versa.
 //
 // All numbers are emitted as strings. TikTok user and message ids exceed 2^53,
 // so a JSON number would silently lose precision on the Node side.
@@ -27,23 +27,25 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { fromBinary } from '@bufbuild/protobuf';
 import {
-    WebcastChatMessage,
-    WebcastGiftMessage,
-    WebcastLikeMessage,
-    WebcastMemberMessage,
-    WebcastRoomUserSeqMessage,
-    WebcastSocialMessage,
-} from 'tiktok-live-proto/v3';
+    WebcastChatMessageSchema,
+    WebcastGiftMessageSchema,
+    WebcastLikeMessageSchema,
+    WebcastMemberMessageSchema,
+    WebcastRoomUserSeqMessageSchema,
+    WebcastSocialMessageSchema,
+} from '../../packages/tiktok-live/src/gen/webcast/model/message/messages_pb.js';
+import type { User } from '../../packages/tiktok-live/src/gen/webcast/model/base/user_2_pb.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtures = join(here, '..', '..', 'fixtures', 'events');
 const expected = join(fixtures, 'expected');
 
 /** Mirrors `EventUser::normalize` in Rust. */
-function normalizeUser(u: { id?: string; nickname?: string; displayId?: string; secUid?: string } | undefined) {
+function normalizeUser(u: User | undefined) {
     return {
-        id: String(u?.id ?? '0'),
+        id: u?.id?.toString() ?? '0',
         nickname: u?.nickname ?? '',
         unique_id: u?.displayId ?? '',
         sec_uid: u?.secUid ?? '',
@@ -51,7 +53,7 @@ function normalizeUser(u: { id?: string; nickname?: string; displayId?: string; 
 }
 
 /** Protobuf counts are signed; the stable API clamps negatives, as Rust does. */
-function count(value: string | number | undefined): string {
+function count(value: string | number | bigint | undefined): string {
     const n = BigInt(value ?? 0);
     return (n < 0n ? 0n : n).toString();
 }
@@ -59,11 +61,11 @@ function count(value: string | number | undefined): string {
 /** Mirrors the Rust normalisers in `crates/ttl-live-events/src/normalize.rs`. */
 const normalizers: Record<string, (payload: Uint8Array) => unknown> = {
     'chat.pb': (payload) => {
-        const m = WebcastChatMessage.decode(payload);
+        const m = fromBinary(WebcastChatMessageSchema, payload);
         return { type: 'chat', user: normalizeUser(m.user), comment: m.content };
     },
     'gift.pb': (payload) => {
-        const m = WebcastGiftMessage.decode(payload);
+        const m = fromBinary(WebcastGiftMessageSchema, payload);
         return {
             type: 'gift',
             user: normalizeUser(m.user),
@@ -77,7 +79,7 @@ const normalizers: Record<string, (payload: Uint8Array) => unknown> = {
         };
     },
     'like.pb': (payload) => {
-        const m = WebcastLikeMessage.decode(payload);
+        const m = fromBinary(WebcastLikeMessageSchema, payload);
         return {
             type: 'like',
             user: normalizeUser(m.user),
@@ -86,7 +88,7 @@ const normalizers: Record<string, (payload: Uint8Array) => unknown> = {
         };
     },
     'member.pb': (payload) => {
-        const m = WebcastMemberMessage.decode(payload);
+        const m = fromBinary(WebcastMemberMessageSchema, payload);
         return {
             type: 'member',
             user: normalizeUser(m.user),
@@ -95,7 +97,7 @@ const normalizers: Record<string, (payload: Uint8Array) => unknown> = {
         };
     },
     'social.pb': (payload) => {
-        const m = WebcastSocialMessage.decode(payload);
+        const m = fromBinary(WebcastSocialMessageSchema, payload);
         return {
             type: 'social',
             user: normalizeUser(m.user),
@@ -105,7 +107,7 @@ const normalizers: Record<string, (payload: Uint8Array) => unknown> = {
         };
     },
     'room-user.pb': (payload) => {
-        const m = WebcastRoomUserSeqMessage.decode(payload);
+        const m = fromBinary(WebcastRoomUserSeqMessageSchema, payload);
         return {
             type: 'room_user',
             total: count(m.total),

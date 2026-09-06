@@ -4,7 +4,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { gzipSync } from 'node:zlib';
 
+import { create, toBinary } from '@bufbuild/protobuf';
 import { ackFrame, decodeBatch, decodePushFrame, decompress } from '../dist/frames.js';
+import {
+  BaseProtoMessageSchema,
+  ProtoMessageFetchResultSchema,
+} from '../dist/gen/webcast/shared/message_pb.js';
 import { enterRoomFrame, heartbeatFrame, pushFrame } from '../dist/player.js';
 
 test('a frame this package builds is one it can read', () => {
@@ -51,12 +56,15 @@ test('an ack echoes the log id and never sends an empty payload', () => {
 
 test('a batch envelope yields its messages and its ack state', () => {
   const batch = decodeBatch(
-    Buffer.concat([
-      lengthDelimited(1, encodeMessage('WebcastChatMessage', Buffer.from([9]))),
-      lengthDelimited(2, Buffer.from('cursor-1')),
-      lengthDelimited(5, Buffer.from('ext-1')),
-      Buffer.from([(9 << 3) | 0, 1]),
-    ]),
+    toBinary(ProtoMessageFetchResultSchema, create(ProtoMessageFetchResultSchema, {
+      messages: [create(BaseProtoMessageSchema, {
+        method: 'WebcastChatMessage',
+        payload: Uint8Array.from([9]),
+      })],
+      cursor: 'cursor-1',
+      internalExt: 'ext-1',
+      needAck: true,
+    })),
   );
   assert.equal(batch.messages.length, 1);
   const message = batch.messages[0];
@@ -82,14 +90,3 @@ test('frame encoders reject negative and unsafe integer values', () => {
   assert.throws(() => pushFrame('ack', '-', { logId: -1 }), /non-negative/);
   assert.throws(() => pushFrame('ack', '-', { logId: Number.MAX_SAFE_INTEGER + 1 }), /safe/);
 });
-
-function lengthDelimited(number: number, body: Uint8Array): Buffer {
-  return Buffer.concat([Buffer.from([(number << 3) | 2, body.length]), Buffer.from(body)]);
-}
-
-function encodeMessage(method: string, payload: Uint8Array): Buffer {
-  return Buffer.concat([
-    lengthDelimited(1, Buffer.from(method)),
-    lengthDelimited(2, payload),
-  ]);
-}

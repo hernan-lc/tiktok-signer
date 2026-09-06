@@ -1,18 +1,20 @@
-// The transport envelope: what a socket frame carries, and how to answer it.
+// The transport envelope: generated protobuf decoding plus the transport-specific adapter.
 //
-// Every WebSocket message is a `PushFrame`. Only `payload_type: "msg"` carries events; `hb`,
-// `ack` and `im_enter_room_resp` are the transport talking to itself. A `msg` frame's payload is
-// a `ProtoMessageFetchResult` — the same envelope `/webcast/im/fetch/` used to return — usually
-// gzipped, and it must be acknowledged or the server stops pushing.
+// Every WebSocket message is a generated `WebcastPushFrame`. Only `payload_type: "msg"` carries
+// events; `hb`, `ack` and `im_enter_room_resp` are transport messages. A `msg` frame's payload is
+// a generated `ProtoMessageFetchResult` — usually gzipped — and it must be acknowledged.
 //
-// The encoders (`pushFrame`, `enterRoomFrame`, `heartbeatFrame`) are in `player.ts`, beside the
-// constants they serialise. This file only reads, plus the one frame that is a reply.
+// The encoders (`pushFrame`, `enterRoomFrame`, `heartbeatFrame`) remain in `player.ts`, beside the
+// player constants they serialise. This module only converts generated schema messages to the
+// package's stable transport adapter types, plus the one frame that is a reply.
 
 import { gunzipSync } from 'node:zlib';
 
-import { asCount, asId, asString, fields, read } from './protobuf.js';
-import type { MessageShape, WireValue } from './protobuf.js';
-import { FRAME_TYPE, PUSH_FRAME_FIELD, pushFrame } from './player.js';
+import { fromBinary } from '@bufbuild/protobuf';
+
+import { WebcastPushFrameSchema } from './gen/webcast/synthetic_proto_pb.js';
+import { ProtoMessageFetchResultSchema } from './gen/webcast/shared/message_pb.js';
+import { FRAME_TYPE, pushFrame } from './player.js';
 
 /// `payload_type` of a frame that carries events. Everything else is transport.
 export const MESSAGE_PAYLOAD_TYPE = 'msg';
@@ -20,15 +22,6 @@ export const MESSAGE_PAYLOAD_TYPE = 'msg';
 /// Header the server sets when the payload is compressed.
 const COMPRESS_TYPE_HEADER = 'compress_type';
 
-interface HeaderEntry { key: string; value: string }
-interface DecodedPushFrame {
-  seqId: string;
-  logId: string;
-  headers: HeaderEntry[];
-  payloadEncoding: string;
-  payloadType: string;
-  payload: Uint8Array;
-}
 export interface PushFrame {
   seqId: string;
   logId: string;
@@ -45,7 +38,7 @@ export interface BatchMessage {
   msgId: string;
   isHistory: boolean;
 }
-interface DecodedBatch {
+export interface EventBatch {
   messages: BatchMessage[];
   cursor: string;
   internalExt: string;
@@ -53,50 +46,31 @@ interface DecodedBatch {
   needAck: boolean;
   pushServer: string;
 }
-export interface EventBatch extends DecodedBatch {}
 
-const bytes = (value: WireValue): Uint8Array =>
-  value instanceof Uint8Array ? value : new Uint8Array();
+function bytes(input: ArrayBuffer | ArrayBufferView): Uint8Array {
+  if (input instanceof Uint8Array) return input;
+  if (ArrayBuffer.isView(input)) {
+    return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+  }
+  return new Uint8Array(input);
+}
 
-const MAP_ENTRY = { 1: ['key', asString], 2: ['value', asString] } satisfies MessageShape;
+/// Convert a generated signed protobuf integer to the package's non-negative count convention.
+function asCount(value: bigint): number {
+  return value > 0n ? Number(value) : 0;
+}
 
-const PUSH_FRAME = {
-  [PUSH_FRAME_FIELD.seqId]: ['seqId', asId],
-  [PUSH_FRAME_FIELD.logId]: ['logId', asId],
-  [PUSH_FRAME_FIELD.headers]: ['headers[]', (value: WireValue) =>
-    read<HeaderEntry>(bytes(value), MAP_ENTRY)],
-  [PUSH_FRAME_FIELD.payloadEncoding]: ['payloadEncoding', asString],
-  [PUSH_FRAME_FIELD.payloadType]: ['payloadType', asString],
-  [PUSH_FRAME_FIELD.payload]: ['payload', bytes],
-} satisfies MessageShape;
-
-const BASE_MESSAGE = {
-  1: ['method', asString],
-  2: ['payload', bytes],
-  3: ['msgId', asId],
-  6: ['isHistory', (value: WireValue) => Boolean(asCount(value))],
-} satisfies MessageShape;
-
-const FETCH_RESULT = {
-  1: ['messages[]', (value: WireValue) => read<BatchMessage>(bytes(value), BASE_MESSAGE)],
-  2: ['cursor', asString],
-  5: ['internalExt', asString],
-  8: ['heartbeatDuration', asCount],
-  9: ['needAck', (value: WireValue) => Boolean(asCount(value))],
-  10: ['pushServer', asString],
-} satisfies MessageShape;
-
-/// Read one WebSocket frame.
+/// Read one generated WebSocket frame and expose the package's stable transport shape.
 export function decodePushFrame(input: ArrayBuffer | ArrayBufferView): PushFrame {
-  const frame = read<DecodedPushFrame>(input, PUSH_FRAME);
-  const headers = new Map((frame.headers ?? []).map((entry) => [entry.key ?? '', entry.value ?? '']));
+  const frame = fromBinary(WebcastPushFrameSchema, bytes(input));
+  const headers = new Map(frame.headers.map((entry) => [entry.key, entry.value]));
   return {
-    seqId: frame.seqId ?? '0',
-    logId: frame.logId ?? '0',
+    seqId: frame.seqId.toString(),
+    logId: frame.logId.toString(),
     headers,
-    payloadEncoding: frame.payloadEncoding ?? '',
-    payloadType: frame.payloadType ?? '',
-    payload: frame.payload ?? new Uint8Array(),
+    payloadEncoding: frame.payloadEncoding,
+    payloadType: frame.payloadType,
+    payload: frame.payload,
     compressType: headers.get(COMPRESS_TYPE_HEADER) ?? '',
     carriesEvents: frame.payloadType === MESSAGE_PAYLOAD_TYPE,
   };
@@ -112,16 +86,21 @@ export function decompress(frame: PushFrame): Uint8Array {
   return frame.payload;
 }
 
-/// Read the event batch inside a `msg` frame's payload.
+/// Read the generated event batch inside a `msg` frame's payload.
 export function decodeBatch(payload: ArrayBuffer | ArrayBufferView): EventBatch {
-  const batch = read<DecodedBatch>(payload, FETCH_RESULT);
+  const batch = fromBinary(ProtoMessageFetchResultSchema, bytes(payload));
   return {
-    messages: batch.messages ?? [],
-    cursor: batch.cursor ?? '',
-    internalExt: batch.internalExt ?? '',
-    heartbeatDuration: batch.heartbeatDuration ?? 0,
-    needAck: batch.needAck ?? false,
-    pushServer: batch.pushServer ?? '',
+    messages: batch.messages.map((message) => ({
+      method: message.method,
+      payload: message.payload,
+      msgId: message.msgId.toString(),
+      isHistory: message.isHistory,
+    })),
+    cursor: batch.cursor,
+    internalExt: batch.internalExt,
+    heartbeatDuration: asCount(batch.heartbeatDuration),
+    needAck: batch.needAck,
+    pushServer: batch.pushServer,
   };
 }
 
@@ -138,6 +117,3 @@ export function ackFrame(frame: PushFrame, internalExt: string): Buffer {
 export function isTransportFrame(frame: PushFrame): boolean {
   return !frame.carriesEvents;
 }
-
-/// Every field of a frame, for a caller that wants what this module chose not to model.
-export { fields as rawFields };

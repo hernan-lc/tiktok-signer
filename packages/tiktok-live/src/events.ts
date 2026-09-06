@@ -1,17 +1,22 @@
-// The events, normalised.
+// Stable event normalisation over the generated v3 protobuf schemas.
 //
-// The socket carries dozens of message types and this file models six of them — the six that make
-// up almost all of a room's traffic. Everything else arrives as `{ type: 'unknown', method,
-// payload }` with its bytes intact, so nothing is lost and a caller who needs one more message can
-// decode it without waiting for this file to grow.
-//
-// The field numbers are from `crates/ttl-live-proto/proto/v3/webcast/model/message/messages.proto`,
-// which is the schema the Rust side decodes with. Only the fields a consumer actually uses are
-// read; the rest are skipped by the wire reader, which is why a schema that gains a field does not
-// break this.
+// The generated messages are the wire/schema source of truth. This file is deliberately still a
+// separate adapter: the package's listener API uses compact, stable names and number/string
+// conventions that should not change whenever TikTok adds a protobuf field.
 
-import { asCount, asId, asString, read } from './protobuf.js';
-import type { MessageShape, WireValue } from './protobuf.js';
+import { fromBinary } from '@bufbuild/protobuf';
+
+import {
+  WebcastChatMessageSchema,
+  WebcastGiftMessageSchema,
+  WebcastLikeMessageSchema,
+  WebcastMemberMessageSchema,
+  WebcastRoomUserSeqMessageSchema,
+  WebcastSocialMessageSchema,
+} from './gen/webcast/model/message/messages_pb.js';
+import { UserSchema } from './gen/webcast/model/base/user_2_pb.js';
+import type { User } from './gen/webcast/model/base/user_2_pb.js';
+import type { Contributor } from './gen/webcast/model/message/messages_pb.js';
 import type {
   ChatEvent,
   EventUser,
@@ -21,17 +26,22 @@ import type {
   MemberEvent,
   RoomUserEvent,
   SocialEvent,
+  TopViewer,
   UnknownEvent,
 } from './types.js';
 
-/// Schema method names for the events normalised here.
+function methodName<T extends string>(schema: { readonly typeName: `${string}.${T}` }): T {
+  return schema.typeName.slice(schema.typeName.lastIndexOf('.') + 1) as T;
+}
+
+/// Schema method names for the events normalised here, derived from generated descriptors.
 export const METHOD = Object.freeze({
-  chat: 'WebcastChatMessage',
-  gift: 'WebcastGiftMessage',
-  like: 'WebcastLikeMessage',
-  member: 'WebcastMemberMessage',
-  social: 'WebcastSocialMessage',
-  roomUser: 'WebcastRoomUserSeqMessage',
+  chat: methodName(WebcastChatMessageSchema),
+  gift: methodName(WebcastGiftMessageSchema),
+  like: methodName(WebcastLikeMessageSchema),
+  member: methodName(WebcastMemberMessageSchema),
+  social: methodName(WebcastSocialMessageSchema),
+  roomUser: methodName(WebcastRoomUserSeqMessageSchema),
 });
 
 /// The event names a client emits, including the two that are not schema messages.
@@ -45,224 +55,136 @@ export const EVENT = Object.freeze({
   unknown: 'unknown',
 });
 
-// --- user ------------------------------------------------------------------------------------
+// --- generated message adapters ----------------------------------------------------------------
 
-const IMAGE_MODEL = {
-  1: ['url_list[]', asString],
-} satisfies MessageShape;
-
-interface DecodedImage { url_list: string[] }
-
-function asImageUrl(value: WireValue): string {
-  if (!(value instanceof Uint8Array)) return '';
-  try {
-    const img = read<DecodedImage>(value, IMAGE_MODEL);
-    return img.url_list?.[0] ?? '';
-  } catch { return ''; }
+/// Convert generated signed protobuf integers to the package's non-negative count convention.
+function asCount(value: bigint | number): number {
+  const integer = typeof value === 'bigint' ? value : BigInt(value);
+  return integer > 0n ? Number(integer) : 0;
 }
 
-const USER = {
-  1: ['id', asId],
-  3: ['nickname', asString],
-  9: ['avatarThumbUrl', asImageUrl],
-  10: ['avatarMediumUrl', asImageUrl],
-  11: ['avatarLargeUrl', asImageUrl],
-  38: ['displayId', asString],
-  46: ['secUid', asString],
-  1012: ['avatarJpgUrl', asImageUrl],
-} satisfies MessageShape;
+/// Generated int64 values remain bigint until this explicit public boundary.
+const asId = (value: bigint): string => value.toString();
 
-interface DecodedUser {
-  id: string;
-  nickname: string;
-  displayId: string;
-  secUid: string;
-  avatarThumbUrl: string;
-  avatarMediumUrl: string;
-  avatarLargeUrl: string;
-  avatarJpgUrl: string;
+function firstImageUrl(image: { urlList: string[] } | undefined): string {
+  return image?.urlList[0] ?? '';
 }
 
-/// The stable slice of a user: who they are, under the names the Node ecosystem already uses.
-///
-/// Deliberately small. These four fields have been present across every schema version seen, so a
-/// consumer keeps working when the surrounding `User` message shifts.
-export function decodeUser(payload?: Uint8Array): EventUser {
-  const user = payload ? read<DecodedUser>(payload, USER) : {};
+/// Map one generated v3 user to the package's intentionally small stable user API.
+function normalizeUser(user: User | undefined): EventUser {
   const avatarUrl =
-    user.avatarThumbUrl ||
-    user.avatarMediumUrl ||
-    user.avatarLargeUrl ||
-    user.avatarJpgUrl ||
+    firstImageUrl(user?.avatarThumb) ||
+    firstImageUrl(user?.avatarMedium) ||
+    firstImageUrl(user?.avatarLarge) ||
+    firstImageUrl(user?.avatarJpg) ||
     '';
-  return {
-    userId: user.id ?? '0',
-    nickname: user.nickname ?? '',
+  const normalized: EventUser = {
+    userId: user ? asId(user.id) : '0',
+    nickname: user?.nickname ?? '',
     /// The `@handle`. `display_id` in the schema, `uniqueId` in the Node connector.
-    uniqueId: user.displayId ?? '',
-    secUid: user.secUid ?? '',
-    avatarUrl: avatarUrl || undefined,
+    uniqueId: user?.displayId ?? '',
+    secUid: user?.secUid ?? '',
   };
+  if (avatarUrl) normalized.avatarUrl = avatarUrl;
+  return normalized;
 }
 
-const decodeUserField = (value: WireValue): EventUser =>
-  decodeUser(value instanceof Uint8Array ? value : undefined);
+/// Decode a generated v3 User message, or return the same blank user for no nested message.
+export function decodeUser(payload?: Uint8Array): EventUser {
+  return normalizeUser(fromBinary(UserSchema, payload ?? new Uint8Array()));
+}
 
 /// Best available label for a user, preferring the stable handle.
 export const label = (user: EventUser): string => user.uniqueId || user.nickname || 'unknown';
 
-// --- the six ---------------------------------------------------------------------------------
-
-const CHAT = { 2: ['user', decodeUserField], 3: ['content', asString] } satisfies MessageShape;
-
-const GIFT_DETAIL = {
-  5: ['id', asId], 12: ['diamondCount', asCount], 16: ['name', asString],
-} satisfies MessageShape;
-const GIFT = {
-  2: ['giftId', asId],
-  5: ['repeatCount', asCount],
-  6: ['comboCount', asCount],
-  7: ['user', decodeUserField],
-  8: ['toUser', decodeUserField],
-  9: ['repeatEnd', asCount],
-  11: ['groupId', asId],
-  15: ['gift', (value: WireValue) =>
-    read<DecodedGiftDetail>(value instanceof Uint8Array ? value : new Uint8Array(), GIFT_DETAIL)],
-} satisfies MessageShape;
-
-interface DecodedGiftDetail {
-  id: string;
-  diamondCount: number;
-  name: string;
+function normalizeContributor(contributor: Contributor): TopViewer {
+  return {
+    rank: asCount(contributor.rank),
+    score: asCount(contributor.score),
+    delta: asCount(contributor.delta),
+    user: normalizeUser(contributor.user),
+  };
 }
-
-interface DecodedChat { user: EventUser; content: string }
-interface DecodedGift {
-  giftId: string;
-  repeatCount: number;
-  comboCount: number;
-  user: EventUser;
-  toUser: EventUser;
-  repeatEnd: number;
-  groupId: string;
-  gift: DecodedGiftDetail;
-}
-interface DecodedLike { count: number; total: number; user: EventUser }
-interface DecodedMember { user: EventUser; memberCount: number; action: number }
-interface DecodedSocial { user: EventUser; action: number; followCount: number; shareCount: number }
-interface DecodedContributor { score: number; user: EventUser; rank: number; delta: number }
-interface DecodedRoomUser { total: number; popularity: number; totalUser: number; anonymous: number; ranks: DecodedContributor[]; seats: DecodedContributor[] }
-
-const LIKE = {
-  2: ['count', asCount], 3: ['total', asCount], 5: ['user', decodeUserField],
-} satisfies MessageShape;
-
-const MEMBER = {
-  2: ['user', decodeUserField], 3: ['memberCount', asCount], 10: ['action', asCount],
-} satisfies MessageShape;
-
-const SOCIAL = {
-  2: ['user', decodeUserField],
-  4: ['action', asCount],
-  6: ['followCount', asCount],
-  8: ['shareCount', asCount],
-} satisfies MessageShape;
-
-const CONTRIBUTOR = {
-  1: ['score', asCount],
-  2: ['user', decodeUserField],
-  3: ['rank', asCount],
-  4: ['delta', asCount],
-} satisfies MessageShape;
-
-const ROOM_USER = {
-  2: ['ranks[]', (value: WireValue) =>
-    value instanceof Uint8Array ? read<DecodedContributor>(value, CONTRIBUTOR) as unknown as DecodedContributor : {} as DecodedContributor],
-  3: ['total', asCount],
-  5: ['seats[]', (value: WireValue) =>
-    value instanceof Uint8Array ? read<DecodedContributor>(value, CONTRIBUTOR) as unknown as DecodedContributor : {} as DecodedContributor],
-  6: ['popularity', asCount],
-  7: ['totalUser', asCount],
-  8: ['anonymous', asCount],
-} satisfies MessageShape;
 
 /// `WebcastSocialMessage.action`, which is how a follow and a share arrive on the same message.
 export const SOCIAL_ACTION = Object.freeze({ follow: 1, share: 3 });
 
-const NORMALIZE = {
-  [METHOD.chat]: (payload: Uint8Array): Omit<ChatEvent, 'method'> => {
-    const message = read<DecodedChat>(payload, CHAT);
-    return { type: EVENT.chat, user: message.user ?? decodeUser(), comment: message.content ?? '' };
+type Normalizer = (payload: Uint8Array) => object;
+
+const NORMALIZE: Record<string, Normalizer> = {
+  [METHOD.chat]: (payload) => {
+    const message = fromBinary(WebcastChatMessageSchema, payload);
+    return {
+      type: EVENT.chat,
+      user: normalizeUser(message.user),
+      comment: message.content,
+    } satisfies Omit<ChatEvent, 'method'>;
   },
-  [METHOD.gift]: (payload: Uint8Array): Omit<GiftEvent, 'method'> => {
-    const message = read<DecodedGift>(payload, GIFT);
+  [METHOD.gift]: (payload) => {
+    const message = fromBinary(WebcastGiftMessageSchema, payload);
     // The nested detail block is omitted on repeat messages of a streak, so the name and price
     // fall back rather than failing: a gift with no name is still a gift.
     return {
       type: EVENT.gift,
-      user: message.user ?? decodeUser(),
-      toUser: message.toUser ?? decodeUser(),
-      giftId: message.giftId ?? '0',
+      user: normalizeUser(message.user),
+      toUser: normalizeUser(message.toUser),
+      giftId: asId(message.giftId),
       giftName: message.gift?.name ?? '',
-      diamondCount: message.gift?.diamondCount ?? 0,
-      repeatCount: message.repeatCount ?? 0,
-      comboCount: message.comboCount ?? 0,
-      groupId: message.groupId ?? '0',
+      diamondCount: asCount(message.gift?.diamondCount ?? 0),
+      repeatCount: asCount(message.repeatCount),
+      comboCount: asCount(message.comboCount),
+      groupId: asId(message.groupId),
       /// A streak sends one message per gift; only the last one is final. Counting the others
       /// double-counts diamonds, which is the classic bug in a gift tally.
-      repeatEnd: Boolean(message.repeatEnd),
-    };
+      repeatEnd: message.repeatEnd > 0,
+    } satisfies Omit<GiftEvent, 'method'>;
   },
-  [METHOD.like]: (payload: Uint8Array): Omit<LikeEvent, 'method'> => {
-    const message = read<DecodedLike>(payload, LIKE);
+  [METHOD.like]: (payload) => {
+    const message = fromBinary(WebcastLikeMessageSchema, payload);
     return {
       type: EVENT.like,
-      user: message.user ?? decodeUser(),
-      count: message.count ?? 0,
-      total: message.total ?? 0,
-    };
+      user: normalizeUser(message.user),
+      count: asCount(message.count),
+      total: asCount(message.total),
+    } satisfies Omit<LikeEvent, 'method'>;
   },
-  [METHOD.member]: (payload: Uint8Array): Omit<MemberEvent, 'method'> => {
-    const message = read<DecodedMember>(payload, MEMBER);
+  [METHOD.member]: (payload) => {
+    const message = fromBinary(WebcastMemberMessageSchema, payload);
     return {
       type: EVENT.member,
-      user: message.user ?? decodeUser(),
-      memberCount: message.memberCount ?? 0,
-      action: message.action ?? 0,
-    };
+      user: normalizeUser(message.user),
+      memberCount: asCount(message.memberCount),
+      action: asCount(message.action),
+    } satisfies Omit<MemberEvent, 'method'>;
   },
-  [METHOD.social]: (payload: Uint8Array): Omit<SocialEvent, 'method'> => {
-    const message = read<DecodedSocial>(payload, SOCIAL);
+  [METHOD.social]: (payload) => {
+    const message = fromBinary(WebcastSocialMessageSchema, payload);
     return {
       type: EVENT.social,
-      user: message.user ?? decodeUser(),
-      action: message.action ?? 0,
-      followCount: message.followCount ?? 0,
-      shareCount: message.shareCount ?? 0,
-    };
+      user: normalizeUser(message.user),
+      action: asCount(message.action),
+      followCount: asCount(message.followCount),
+      shareCount: asCount(message.shareCount),
+    } satisfies Omit<SocialEvent, 'method'>;
   },
-  [METHOD.roomUser]: (payload: Uint8Array): Omit<RoomUserEvent, 'method'> => {
-    const message = read<DecodedRoomUser>(payload, ROOM_USER);
-    const mapContributor = (c: DecodedContributor): import('./types.ts').TopViewer => ({
-      rank: c.rank ?? 0,
-      score: c.score ?? 0,
-      delta: c.delta ?? 0,
-      user: c.user ?? decodeUser(),
-    });
+  [METHOD.roomUser]: (payload) => {
+    const message = fromBinary(WebcastRoomUserSeqMessageSchema, payload);
+    const ranks = message.ranks.map(normalizeContributor);
     return {
       type: EVENT.roomUser,
-      viewers: message.total ?? 0,
-      popularity: message.popularity ?? 0,
-      totalUser: message.totalUser ?? 0,
-      anonymous: message.anonymous ?? 0,
-      topViewers: (message.ranks ?? []).map(mapContributor),
-      rankedViewers: (message.ranks ?? []).map(mapContributor),
-    };
+      viewers: asCount(message.total),
+      popularity: asCount(message.popularity),
+      totalUser: asCount(message.totalUser),
+      anonymous: asCount(message.anonymous),
+      // Preserve the existing public API, which exposes the ranking under both names.
+      topViewers: ranks,
+      rankedViewers: ranks,
+    } satisfies Omit<RoomUserEvent, 'method'>;
   },
 };
 
-/// Normalise one message. Never throws: an unmodelled method, or a payload that does not decode,
-/// becomes `unknown` with its bytes kept, so one bad event cannot take a batch down.
+/// Normalise one generated message. Never throws: an unmodelled method, or a payload that does
+/// not decode, becomes `unknown` with its bytes kept, so one bad event cannot take a batch down.
 export function decodeEvent(method: typeof METHOD.chat, payload: Uint8Array): ChatEvent | UnknownEvent;
 export function decodeEvent(method: typeof METHOD.gift, payload: Uint8Array): GiftEvent | UnknownEvent;
 export function decodeEvent(method: typeof METHOD.like, payload: Uint8Array): LikeEvent | UnknownEvent;
@@ -271,7 +193,7 @@ export function decodeEvent(method: typeof METHOD.social, payload: Uint8Array): 
 export function decodeEvent(method: typeof METHOD.roomUser, payload: Uint8Array): RoomUserEvent | UnknownEvent;
 export function decodeEvent(method: string, payload: Uint8Array): LiveEvent;
 export function decodeEvent(method: string, payload: Uint8Array): LiveEvent {
-  const normalize = (NORMALIZE as Record<string, ((bytes: Uint8Array) => object) | undefined>)[method];
+  const normalize = NORMALIZE[method];
   if (!normalize) return { type: EVENT.unknown, method, payload };
   try {
     return { ...normalize(payload), method } as LiveEvent;

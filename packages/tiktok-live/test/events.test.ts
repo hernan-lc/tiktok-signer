@@ -3,14 +3,25 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { create, toBinary } from '@bufbuild/protobuf';
 import { EVENT, METHOD, decodeEvent, decodeUser, label } from '../dist/events.js';
+import { UserSchema } from '../dist/gen/webcast/model/base/user_2_pb.js';
+import { GiftSchema } from '../dist/gen/webcast/model/color_group_pb.js';
+import {
+  WebcastChatMessageSchema,
+  WebcastGiftMessageSchema,
+  WebcastRoomUserSeqMessageSchema,
+} from '../dist/gen/webcast/model/message/messages_pb.js';
 
 const USER_ID = 6810000000000000123n;
 
 test('a chat message carries its user and its text', () => {
   const event = decodeEvent(
     METHOD.chat,
-    concat(sub(2, user('someone', 'Some One')), str(3, 'hola')),
+    toBinary(WebcastChatMessageSchema, create(WebcastChatMessageSchema, {
+      user: user('someone', 'Some One'),
+      content: 'hola',
+    })),
   );
   assert.equal(event.type, EVENT.chat);
   assert.equal(event.comment, 'hola');
@@ -20,10 +31,15 @@ test('a chat message carries its user and its text', () => {
 });
 
 test('a gift reads its detail block when there is one', () => {
-  const detail = concat(varint(5, 5655n), varint(12, 1n), str(16, 'Rose'));
   const event = decodeEvent(
     METHOD.gift,
-    concat(varint(2, 5655n), varint(5, 3n), sub(7, user('someone')), varint(9, 1n), sub(15, detail)),
+    toBinary(WebcastGiftMessageSchema, create(WebcastGiftMessageSchema, {
+      giftId: 5655n,
+      repeatCount: 3,
+      user: user('someone'),
+      repeatEnd: 1,
+      gift: create(GiftSchema, { id: 5655n, diamondCount: 1, name: 'Rose' }),
+    })),
   );
   if (event.type !== EVENT.gift) assert.fail(`expected gift, got ${event.type}`);
   assert.equal(event.giftId, '5655');
@@ -36,7 +52,13 @@ test('a gift reads its detail block when there is one', () => {
 // Every repeat of a streak omits the detail block, so a gift with no name is normal, not broken —
 // the client fills it in from the room's gift table.
 test('a gift without a detail block still decodes', () => {
-  const event = decodeEvent(METHOD.gift, concat(varint(2, 5655n), sub(7, user('someone'))));
+  const event = decodeEvent(
+    METHOD.gift,
+    toBinary(WebcastGiftMessageSchema, create(WebcastGiftMessageSchema, {
+      giftId: 5655n,
+      user: user('someone'),
+    })),
+  );
   if (event.type !== EVENT.gift) assert.fail(`expected gift, got ${event.type}`);
   assert.equal(event.giftId, '5655');
   assert.equal(event.giftName, '');
@@ -45,7 +67,13 @@ test('a gift without a detail block still decodes', () => {
 });
 
 test('viewer counts come off the room-user message', () => {
-  const event = decodeEvent(METHOD.roomUser, concat(varint(3, 35075n), varint(6, 41n)));
+  const event = decodeEvent(
+    METHOD.roomUser,
+    toBinary(WebcastRoomUserSeqMessageSchema, create(WebcastRoomUserSeqMessageSchema, {
+      total: 35075n,
+      popularity: 41n,
+    })),
+  );
   assert.equal(event.type, EVENT.roomUser);
   assert.equal(event.viewers, 35075);
   assert.equal(event.popularity, 41);
@@ -68,58 +96,16 @@ test('a payload that cannot be read degrades instead of throwing', () => {
 });
 
 test('a missing user is a blank user, not a crash', () => {
-  const event = decodeEvent(METHOD.chat, str(3, 'orphan comment'));
+  const event = decodeEvent(
+    METHOD.chat,
+    toBinary(WebcastChatMessageSchema, create(WebcastChatMessageSchema, { content: 'orphan comment' })),
+  );
   if (event.type !== EVENT.chat) assert.fail(`expected chat, got ${event.type}`);
   assert.equal(event.user.uniqueId, '');
   assert.equal(label(event.user), 'unknown');
   assert.deepEqual(decodeUser(), { userId: '0', nickname: '', uniqueId: '', secUid: '' });
 });
 
-// --- encoders, so the fixtures above are readable rather than hex ------------------------------
-
-function user(uniqueId: string, nickname = ''): Uint8Array {
-  return concat(varint(1, USER_ID), nickname ? str(3, nickname) : new Uint8Array(), str(38, uniqueId));
-}
-
-function varint(number: number, value: bigint | number): Uint8Array {
-  const out = [(number << 3) | 0];
-  let remaining = BigInt(value);
-  do {
-    let byte = Number(remaining & 0x7fn);
-    remaining >>= 7n;
-    if (remaining) byte |= 0x80;
-    out.push(byte);
-  } while (remaining);
-  return Uint8Array.from(out);
-}
-
-function bytes(number: number, body: Uint8Array): Uint8Array {
-  return concat(varintValue((number << 3) | 2), varintValue(body.length), body);
-}
-
-const str = (number: number, value: string): Uint8Array =>
-  bytes(number, new TextEncoder().encode(value));
-const sub = (number: number, body: Uint8Array): Uint8Array => bytes(number, body);
-
-function varintValue(value: bigint | number): Uint8Array {
-  const out: number[] = [];
-  let remaining = BigInt(value);
-  do {
-    let byte = Number(remaining & 0x7fn);
-    remaining >>= 7n;
-    if (remaining) byte |= 0x80;
-    out.push(byte);
-  } while (remaining);
-  return Uint8Array.from(out);
-}
-
-function concat(...parts: Uint8Array[]): Uint8Array {
-  const total = parts.reduce((sum, part) => sum + part.length, 0);
-  const out = new Uint8Array(total);
-  let at = 0;
-  for (const part of parts) {
-    out.set(part, at);
-    at += part.length;
-  }
-  return out;
+function user(uniqueId: string, nickname = '') {
+  return create(UserSchema, { id: USER_ID, nickname, displayId: uniqueId });
 }

@@ -40,7 +40,7 @@ cargo run -p ttl-live-events --example extract-fixtures -- fixtures/f0/im_fetch.
 # 2. synthetic events + the redacted batch
 cargo run -p ttl-live-events --example make-fixtures -- fixtures/events fixtures/f0/im_fetch.pb
 
-# 3. expected JSON, via the Node oracle (tiktok-live-proto/v3)
+# 3. expected JSON, via the Node oracle (local protoc-gen-es bindings)
 cd examples/node-connector && npx tsx golden-fixtures.ts
 ```
 
