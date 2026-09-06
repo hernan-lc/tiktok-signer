@@ -60,6 +60,9 @@ pub async fn healthz() -> Response {
     (StatusCode::OK, Json(json!({ "status": "ok" }))).into_response()
 }
 
+/// Readiness means the signer initialized at startup (see `ConnectionSigner::ready`).
+/// It is not a live health check: runtime degradation surfaces per request as
+/// `SIGNER_UNAVAILABLE`/`SIGN_FAILED`, so alert on those, not on this endpoint flipping.
 pub async fn readyz(State(service): State<Arc<ConnectService>>) -> Response {
     if service.signer_ready() {
         return (StatusCode::OK, Json(json!({ "status": "ok" }))).into_response();

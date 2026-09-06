@@ -323,6 +323,14 @@ impl ConnectService {
                 .or_insert_with(|| Arc::new(OnceCell::new()))
                 .clone()
         };
+        // Known benign race, documented deliberately: the cache check above and this join
+        // are not atomic with another flight's completion, so a request that missed just
+        // before a sibling populated the cache can start a second discovery for the same
+        // creator. Both flights resolve the same value and the cache absorbs it, so this
+        // is one redundant upstream request in unusual scheduling — an optimization
+        // footnote, not a correctness issue. Closing it would need a post-join cache
+        // re-check plus cleanup of the unused cell, which is more concurrency machinery
+        // than a rare duplicate lookup justifies.
 
         let result = flight
             .get_or_init(|| async {

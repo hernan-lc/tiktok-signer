@@ -29,6 +29,10 @@ pub trait ConnectionSigner: Send + Sync {
         &self,
         room_id: String,
     ) -> ServiceFuture<'_, Result<SignedConnection, SignFailure>>;
+    /// Startup readiness only: whether the signer initialized successfully. A `true` here
+    /// says nothing about later runtime health — engine loss, backend outages, and stale
+    /// sessions surface per request (`SignerUnavailable`, `SignFailed`, …), which is what
+    /// `/readyz` consumers and alerting should key on for degradation, not this flag.
     fn ready(&self) -> bool;
     fn identity(&self) -> ClientIdentity;
 }

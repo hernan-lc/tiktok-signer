@@ -47,7 +47,9 @@ curl.exe -X POST http://127.0.0.1:8080/v1/connect `
   -d '{"uniqueId":"@creator"}'
 ```
 
-`/healthz`, `/readyz`, and `/metrics` are available for service operation. Signed URLs, cookies,
+`/healthz`, `/readyz`, and `/metrics` are available for service operation. `readyz` reflects
+successful startup, not ongoing signer health — runtime degradation surfaces per request as
+`SIGNER_UNAVAILABLE`/`SIGN_FAILED`. Signed URLs, cookies,
 signatures, and API keys are not written to structured logs.
 
 ## SDK
