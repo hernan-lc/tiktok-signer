@@ -1,0 +1,34 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "..",
+    "outDir": "dist",
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "useUnknownInCatchVariables": true,
+    "verbatimModuleSyntax": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "src/**/*.ts",
+    "../tiktok-live/src/events.ts",
+    "../tiktok-live/src/frames.ts",
+    "../tiktok-live/src/json-validation.ts",
+    "../tiktok-live/src/player.ts",
+    "../tiktok-live/src/session.ts",
+    "../tiktok-live/src/types.ts",
+    "../tiktok-live/src/discovery.ts",
+    "../tiktok-live/src/gen/**/*.ts"
+  ]
+}

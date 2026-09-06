@@ -2616,6 +2616,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "ttl-live-api"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "ttl-live-discovery",
+ "ttl-sign-core",
+ "ttl-sign-embedded",
+ "ttl-sign-headless",
+]
+
+[[package]]
 name = "ttl-live-discovery"
 version = "0.1.0"
 dependencies = [

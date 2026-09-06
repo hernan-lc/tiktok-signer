@@ -1,0 +1,34 @@
+{
+  "name": "@company/tiktok-live",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Node.js TikTok LIVE SDK with direct TikTok WebSocket connections.",
+  "license": "MIT",
+  "main": "./dist/live-sdk/src/index.js",
+  "types": "./dist/live-sdk/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/live-sdk/src/index.d.ts",
+      "import": "./dist/live-sdk/src/index.js"
+    }
+  },
+  "files": ["dist", "src", "README.md"],
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "clean": "node -e \"const fs=require('node:fs'); fs.rmSync('dist',{recursive:true,force:true}); fs.rmSync('.test-dist',{recursive:true,force:true})\"",
+    "prebuild": "npm run clean",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "npm run build && tsc -p tsconfig.test.json --noEmit",
+    "test": "npm run build && tsc -p tsconfig.test.json && node --test .test-dist/*.test.js"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.14.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.9.3"
+  }
+}

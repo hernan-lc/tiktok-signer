@@ -1,0 +1,36 @@
+[package]
+name = "ttl-live-api"
+description = "A TikTok LIVE connection-ticket broker for direct SDK WebSocket connections."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "ttl-live-api"
+path = "src/main.rs"
+
+[features]
+default = []
+# Use V8 for the warm embedded signer instead of the smaller QuickJS runtime.
+v8 = ["ttl-sign-embedded/v8"]
+
+[dependencies]
+ttl-sign-core = { workspace = true }
+ttl-live-discovery = { workspace = true }
+ttl-sign-headless = { workspace = true }
+ttl-sign-embedded = { workspace = true }
+
+anyhow = { workspace = true }
+axum = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["net", "signal"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

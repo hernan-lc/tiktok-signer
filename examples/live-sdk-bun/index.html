@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>live-sdk bun check — console only</title>
+  </head>
+  <body>
+    <script type="module">
+      // Console-only check page. The uniqueId is taken from the page query string:
+      //   http://127.0.0.1:3000/?uniqueId=@creator
+      // All LIVE traffic is relayed by the Bun server (see server.ts) as SSE;
+      // everything below is reported with console.log / console.error only.
+      const params = new URLSearchParams(location.search);
+      const uniqueId =
+        params.get("uniqueId") ??
+        params.get("unique_id") ??
+        params.get("id") ??
+        params.get("handle") ??
+        "";
+
+      const passthrough = new URLSearchParams();
+      if (uniqueId) passthrough.set("uniqueId", uniqueId);
+      for (const key of ["apiUrl", "apiKey", "gifts"]) {
+        const value = params.get(key);
+        if (value !== null && value !== "") passthrough.set(key, value);
+      }
+
+      console.log("[live-sdk] page", location.href);
+      console.log("[live-sdk] query uniqueId", uniqueId || "(missing)");
+
+      if (!uniqueId) {
+        console.error(
+          "[live-sdk] missing uniqueId query param. Use /?uniqueId=@creator",
+        );
+      } else {
+        const streamUrl = `/api/stream?${passthrough.toString()}`;
+        console.log("[live-sdk] connecting", streamUrl);
+
+        const source = new EventSource(streamUrl);
+
+        source.onopen = () => {
+          console.log("[live-sdk] stream open", { uniqueId });
+        };
+
+        source.onmessage = (message) => {
+          let data = message.data;
+          try {
+            data = JSON.parse(message.data);
+          } catch {
+            // Keep raw string payloads as-is.
+          }
+          console.log("[live-sdk]", data);
+        };
+
+        source.onerror = (event) => {
+          console.error("[live-sdk] stream error", {
+            readyState: source.readyState,
+            event: String(event?.type ?? "error"),
+          });
+        };
+
+        addEventListener("beforeunload", () => source.close());
+      }
+    </script>
+  </body>
+</html>

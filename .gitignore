@@ -13,6 +13,8 @@
 /packages/tiktok-live/dist/
 /packages/tiktok-live/.test-dist/
 /packages/tiktok-live/.example-dist/
+/packages/live-sdk/dist/
+/packages/live-sdk/.test-dist/
 # fixtures and NOTES.md.
 /fixtures/*
 !/fixtures/NOTES.md

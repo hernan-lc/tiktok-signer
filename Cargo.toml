@@ -14,6 +14,7 @@ members = [
     "crates/ttl-live-ws",
     "crates/ttl-live-proto",
     "crates/ttl-live-events",
+    "crates/ttl-live-api",
 ]
 default-members = [
     "crates/ttl-sign-core",
@@ -28,6 +29,7 @@ default-members = [
     "crates/ttl-live-ws",
     "crates/ttl-live-proto",
     "crates/ttl-live-events",
+    "crates/ttl-live-api",
 ]
 
 [workspace.package]
@@ -48,6 +50,7 @@ ttl-sign-embedded = { path = "crates/ttl-sign-embedded" }
 ttl-live-ws = { path = "crates/ttl-live-ws" }
 ttl-live-proto = { path = "crates/ttl-live-proto" }
 ttl-live-events = { path = "crates/ttl-live-events" }
+ttl-live-api = { path = "crates/ttl-live-api" }
 
 anyhow = "1"
 base64 = "0.22"
@@ -66,3 +69,5 @@ thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+axum = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip"] }
