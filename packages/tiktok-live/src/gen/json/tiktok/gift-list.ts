@@ -81,6 +81,10 @@ export const TikTokGiftListResponseSchema = {
                 "x-expected": "safe non-negative integer"
               },
               "icon": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": "https://ttl-live.dev/schema/tiktok/image.schema.json",
+                "title": "TikTok Image",
+                "x-typescript-name": "TikTokImage",
                 "type": "object",
                 "properties": {
                   "url_list": {

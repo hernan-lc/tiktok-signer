@@ -26,6 +26,7 @@ import {
   TikTokRoomLookupResponseSchema,
   type TikTokRoomLookupResponse,
 } from './gen/json/tiktok/room-lookup.js';
+import type { TikTokImage } from './gen/json/tiktok/image.js';
 import {
   TikTokSearchRoomSchema,
   type TikTokSearchRoom,
@@ -267,12 +268,10 @@ export class Discovery {
   }
 }
 
-const firstUrl = (image?: Image): string => image?.url_list?.[0] ?? '';
+const firstUrl = (image?: TikTokImage): string => image?.url_list?.[0] ?? '';
 
 export interface DiscoveryOptions {
   cookie?: string;
   userAgent?: string;
   timeoutMs?: number;
 }
-
-interface Image { url_list?: string[] }

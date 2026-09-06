@@ -11,3 +11,7 @@ This directory contains the machine-readable contracts for the package.
 `schema/json` is the source of truth for JSON. Run `npm run schema:generate` after changing a
 schema, and use `npm run schema:check` in CI to ensure generated files are current. This package
 does not expose an HTTP service, so it intentionally has no OpenAPI document.
+
+The dependency-free validator intentionally supports only the schema keywords implemented in
+`src/json-validation.ts`; the generator rejects other validation keywords. The supported `uri`
+format is asserted at runtime.

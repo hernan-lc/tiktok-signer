@@ -17,7 +17,22 @@ export interface JsonSchema {
   readonly const?: unknown;
   readonly enum?: readonly unknown[];
   readonly format?: string;
-  readonly [key: string]: unknown;
+  readonly $comment?: string;
+  readonly $defs?: Readonly<Record<string, JsonSchema>>;
+  readonly $id?: string;
+  readonly $ref?: string;
+  readonly $schema?: string;
+  readonly default?: unknown;
+  readonly deprecated?: boolean;
+  readonly description?: string;
+  readonly examples?: readonly unknown[];
+  readonly readOnly?: boolean;
+  readonly title?: string;
+  readonly writeOnly?: boolean;
+  readonly 'x-expected'?: string;
+  readonly 'x-typescript-name'?: string;
+  readonly 'x-typescript-no-index'?: boolean;
+  readonly 'x-typescript-type'?: string;
 }
 
 export class JsonValidationError extends TypeError {
@@ -64,6 +79,10 @@ function check(value: unknown, schema: JsonSchema, path: string): Failure | null
     return failure(path, 'an allowed value', value, schema);
   }
 
+  if (schema.format !== undefined && schema.format !== 'uri') {
+    throw new TypeError(`Unsupported JSON Schema format: ${schema.format}`);
+  }
+
   if (schema.allOf) {
     for (const branch of schema.allOf) {
       const result = check(value, branch, path);
@@ -75,7 +94,6 @@ function check(value: unknown, schema: JsonSchema, path: string): Failure | null
     const matches = branches.filter((branch) => check(value, branch, path) === null).length;
     const valid = schema.anyOf ? matches > 0 : matches === 1;
     if (!valid) return failure(path, expected(schema), value, schema);
-    return null;
   }
 
   const types = Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : [];
@@ -85,6 +103,9 @@ function check(value: unknown, schema: JsonSchema, path: string): Failure | null
 
   if (typeof value === 'string') {
     if (schema.pattern && !new RegExp(schema.pattern).test(value)) {
+      return failure(path, expected(schema), value, schema);
+    }
+    if (schema.format === 'uri' && !isUri(value)) {
       return failure(path, expected(schema), value, schema);
     }
   }
@@ -156,10 +177,20 @@ function expected(schema: JsonSchema): string {
   const label = schema['x-expected'];
   if (typeof label === 'string') return label;
   if (schema.pattern === '^[0-9]+$') return 'numeric string';
+  if (schema.format === 'uri') return 'a valid URI';
   if (Array.isArray(schema.type)) return schema.type.join(' or ');
   if (typeof schema.type === 'string') return schema.type;
   if (schema.anyOf) return 'one of the allowed shapes';
   return 'a valid value';
+}
+
+function isUri(value: string): boolean {
+  try {
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function received(value: unknown): string {

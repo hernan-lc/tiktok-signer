@@ -14,6 +14,16 @@ const OUTPUT_ROOT = path.join(PACKAGE_ROOT, 'src', 'gen', 'json');
 
 const documents = new Map();
 
+// Keep this list intentionally small. Every validation keyword accepted here must have a
+// corresponding implementation in src/json-validation.ts; unsupported keywords fail generation
+// instead of becoming silently unenforced runtime contracts. `x-*` keys are package annotations.
+const SUPPORTED_SCHEMA_KEYS = new Set([
+  '$comment', '$defs', '$id', '$ref', '$schema',
+  'additionalProperties', 'allOf', 'anyOf', 'const', 'default', 'description', 'deprecated',
+  'enum', 'examples', 'format', 'items', 'maximum', 'minimum', 'pattern', 'properties',
+  'oneOf', 'readOnly', 'required', 'title', 'type', 'writeOnly',
+]);
+
 function walk(directory) {
   const entries = fs.readdirSync(directory, { withFileTypes: true }).sort((left, right) =>
     left.name.localeCompare(right.name));
@@ -82,6 +92,49 @@ function pascalCase(value) {
 
 function typeName(document, filePath) {
   return document['x-typescript-name'] || pascalCase(path.basename(filePath));
+}
+
+function assertSupportedSchema(node, filePath, location = '$') {
+  if (node === true || node === false) return;
+  if (!node || typeof node !== 'object' || Array.isArray(node)) {
+    throw new Error(`invalid JSON Schema at ${path.relative(PACKAGE_ROOT, filePath)}:${location}`);
+  }
+
+  for (const key of Object.keys(node)) {
+    if (!SUPPORTED_SCHEMA_KEYS.has(key) && !key.startsWith('x-')) {
+      throw new Error(
+        `unsupported JSON Schema keyword "${key}" at ${path.relative(PACKAGE_ROOT, filePath)}:${location}`,
+      );
+    }
+  }
+
+  if (node.format !== undefined && node.format !== 'uri') {
+    throw new Error(
+      `unsupported JSON Schema format "${node.format}" at ${path.relative(PACKAGE_ROOT, filePath)}:${location}`,
+    );
+  }
+
+  if (node.$defs && typeof node.$defs === 'object' && !Array.isArray(node.$defs)) {
+    for (const [name, definition] of Object.entries(node.$defs)) {
+      assertSupportedSchema(definition, filePath, `${location}.$defs.${name}`);
+    }
+  }
+  if (node.properties && typeof node.properties === 'object' && !Array.isArray(node.properties)) {
+    for (const [name, property] of Object.entries(node.properties)) {
+      assertSupportedSchema(property, filePath, `${location}.properties.${name}`);
+    }
+  }
+  if (node.additionalProperties && typeof node.additionalProperties === 'object') {
+    assertSupportedSchema(node.additionalProperties, filePath, `${location}.additionalProperties`);
+  }
+  if (node.items && typeof node.items === 'object' && !Array.isArray(node.items)) {
+    assertSupportedSchema(node.items, filePath, `${location}.items`);
+  }
+  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
+    if (!Array.isArray(node[keyword])) continue;
+    node[keyword].forEach((branch, index) =>
+      assertSupportedSchema(branch, filePath, `${location}.${keyword}[${index}]`));
+  }
 }
 
 function propertyName(name) {
@@ -168,9 +221,14 @@ function generate(filePath) {
   fs.writeFileSync(outputPath, source);
 }
 
+const schemaFiles = walk(SCHEMA_ROOT);
+for (const filePath of schemaFiles) {
+  assertSupportedSchema(readDocument(filePath), filePath);
+}
+
 fs.mkdirSync(OUTPUT_ROOT, { recursive: true });
 removeGeneratedFiles(OUTPUT_ROOT);
-for (const filePath of walk(SCHEMA_ROOT)) {
+for (const filePath of schemaFiles) {
   if (path.basename(filePath) === 'common.schema.json') continue;
   generate(filePath);
 }
