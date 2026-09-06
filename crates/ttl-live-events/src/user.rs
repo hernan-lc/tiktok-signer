@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use ttl_live_proto::webcast::model::base::user::User;
+use ttl_live_proto::webcast::model::base::{user::User, ImageModel};
 
 /// Minimal, stable user identity shared by every public-area event.
 ///
@@ -14,6 +14,8 @@ pub struct EventUser {
     /// connector; exposed here under the connector's name.
     pub unique_id: String,
     pub sec_uid: String,
+    /// Best available avatar URL from the generated user message.
+    pub avatar_url: Option<String>,
 }
 
 impl EventUser {
@@ -23,11 +25,20 @@ impl EventUser {
         let Some(user) = user else {
             return Self::default();
         };
+        let avatar_url = [
+            user.avatar_thumb.as_ref(),
+            user.avatar_medium.as_ref(),
+            user.avatar_large.as_ref(),
+            user.avatar_jpg.as_ref(),
+        ]
+        .into_iter()
+        .find_map(first_image_url);
         Self {
             id: user.id as u64,
             nickname: user.nickname.clone(),
             unique_id: user.display_id.clone(),
             sec_uid: user.sec_uid.clone(),
+            avatar_url,
         }
     }
 
@@ -41,4 +52,11 @@ impl EventUser {
             "unknown"
         }
     }
+}
+
+fn first_image_url(image: Option<&ImageModel>) -> Option<String> {
+    image
+        .and_then(|image| image.url_list.first())
+        .filter(|url| !url.is_empty())
+        .cloned()
 }

@@ -2,7 +2,9 @@
 // Generated schema constants are embedded in src/gen/json so validation keeps working from the
 // published dist directory without relying on a working-directory-relative schema lookup.
 
-export interface JsonSchema {
+export type JsonSchema = true | false | JsonSchemaObject;
+
+export interface JsonSchemaObject {
   readonly type?: string | readonly string[];
   readonly properties?: Readonly<Record<string, JsonSchema>>;
   readonly required?: readonly string[];
@@ -71,7 +73,15 @@ export function validateJson<T>(value: unknown, schema: JsonSchema, endpoint: st
   return value as T;
 }
 
-function check(value: unknown, schema: JsonSchema, path: string): Failure | null {
+function check(value: unknown, schema: JsonSchema, path: string, root: JsonSchema = schema): Failure | null {
+  if (schema === true) return null;
+  if (schema === false) return failure(path, 'a value allowed by the schema', value, schema);
+
+  if (schema.$ref !== undefined) {
+    const target = resolveLocalReference(root, schema.$ref);
+    return check(value, target, path, root);
+  }
+
   if (schema.const !== undefined && !Object.is(value, schema.const)) {
     return failure(path, `the constant ${JSON.stringify(schema.const)}`, value, schema);
   }
@@ -85,13 +95,13 @@ function check(value: unknown, schema: JsonSchema, path: string): Failure | null
 
   if (schema.allOf) {
     for (const branch of schema.allOf) {
-      const result = check(value, branch, path);
+      const result = check(value, branch, path, root);
       if (result) return result;
     }
   }
   if (schema.anyOf || schema.oneOf) {
     const branches = schema.anyOf ?? schema.oneOf ?? [];
-    const matches = branches.filter((branch) => check(value, branch, path) === null).length;
+    const matches = branches.filter((branch) => check(value, branch, path, root) === null).length;
     const valid = schema.anyOf ? matches > 0 : matches === 1;
     if (!valid) return failure(path, expected(schema), value, schema);
   }
@@ -121,7 +131,7 @@ function check(value: unknown, schema: JsonSchema, path: string): Failure | null
   if (Array.isArray(value)) {
     if (schema.items) {
       for (let index = 0; index < value.length; index += 1) {
-        const result = check(value[index], schema.items, `${path}[${index}]`);
+        const result = check(value[index], schema.items, `${path}[${index}]`, root);
         if (result) return result;
       }
     }
@@ -136,7 +146,7 @@ function check(value: unknown, schema: JsonSchema, path: string): Failure | null
     }
     for (const [key, propertySchema] of Object.entries(schema.properties ?? {})) {
       if (!Object.hasOwn(value, key)) continue;
-      const result = check(value[key], propertySchema, `${path}.${key}`);
+      const result = check(value[key], propertySchema, `${path}.${key}`, root);
       if (result) return result;
     }
     if (schema.additionalProperties === false) {
@@ -148,7 +158,7 @@ function check(value: unknown, schema: JsonSchema, path: string): Failure | null
       const known = new Set(Object.keys(schema.properties ?? {}));
       for (const [key, child] of Object.entries(value)) {
         if (known.has(key)) continue;
-        const result = check(child, schema.additionalProperties, `${path}.${key}`);
+        const result = check(child, schema.additionalProperties, `${path}.${key}`, root);
         if (result) return result;
       }
     }
@@ -174,6 +184,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function expected(schema: JsonSchema): string {
+  if (schema === false) return 'a value allowed by the schema';
+  if (schema === true) return 'any value';
   const label = schema['x-expected'];
   if (typeof label === 'string') return label;
   if (schema.pattern === '^[0-9]+$') return 'numeric string';
@@ -203,9 +215,29 @@ function received(value: unknown): string {
 function failure(path: string, expectedValue: string, value: unknown, schema: JsonSchema): Failure {
   return {
     path,
-    expected: schema['x-expected'] && typeof schema['x-expected'] === 'string'
+    expected: schema !== true && schema !== false && schema['x-expected'] && typeof schema['x-expected'] === 'string'
       ? schema['x-expected']
       : expectedValue,
     received: received(value),
   };
+}
+
+/** Resolve the local `$ref` form emitted by JSON Schema generators. */
+function resolveLocalReference(root: JsonSchema, reference: string): JsonSchema {
+  if (reference === '#') return root;
+  if (!reference.startsWith('#/')) {
+    throw new TypeError(`Unsupported JSON Schema reference: ${reference}`);
+  }
+  let value: unknown = root;
+  for (const segment of reference.slice(2).split('/')) {
+    const key = segment.replaceAll('~1', '/').replaceAll('~0', '~');
+    if (!value || typeof value !== 'object' || !(key in value)) {
+      throw new TypeError(`JSON Schema reference does not exist: ${reference}`);
+    }
+    value = (value as Record<string, unknown>)[key];
+  }
+  if (value !== true && value !== false && (!value || typeof value !== 'object' || Array.isArray(value))) {
+    throw new TypeError(`JSON Schema reference is not a schema: ${reference}`);
+  }
+  return value as JsonSchema;
 }

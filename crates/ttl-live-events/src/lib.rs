@@ -33,7 +33,7 @@ mod user;
 pub use dynamic::{decode_webcast_message, SchemaField, SchemaMessage, SchemaObject, SchemaValue};
 pub use event::{
     ChatEvent, DecodedEvent, EventBatch, GiftEvent, LikeEvent, LiveEvent, MemberEvent, RawEvent,
-    RoomUserEvent, SocialEvent,
+    RoomUserEvent, SocialEvent, TopViewer,
 };
 pub use user::EventUser;
 

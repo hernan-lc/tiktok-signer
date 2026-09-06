@@ -57,6 +57,17 @@ pub struct RoomUserEvent {
     pub popularity: u64,
     pub total_user: u64,
     pub anonymous: u64,
+    pub top_viewers: Vec<TopViewer>,
+    pub ranked_viewers: Vec<TopViewer>,
+}
+
+/// A contributor in the room's viewer ranking.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopViewer {
+    pub rank: u64,
+    pub score: u64,
+    pub delta: u64,
+    pub user: EventUser,
 }
 
 /// The stable, listener-facing event API.

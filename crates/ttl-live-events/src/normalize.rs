@@ -6,7 +6,7 @@
 
 use prost::Message;
 use ttl_live_proto::messages::{
-    WebcastChatMessage, WebcastGiftMessage, WebcastLikeMessage, WebcastMemberMessage,
+    Contributor, WebcastChatMessage, WebcastGiftMessage, WebcastLikeMessage, WebcastMemberMessage,
     WebcastRoomUserSeqMessage, WebcastSocialMessage,
 };
 
@@ -82,5 +82,16 @@ pub(crate) fn room_user(payload: &[u8]) -> Result<LiveEvent, prost::DecodeError>
         popularity: count(message.popularity),
         total_user: count(message.total_user),
         anonymous: count(message.anonymous),
+        top_viewers: message.ranks.iter().map(top_viewer).collect(),
+        ranked_viewers: message.ranks.iter().map(top_viewer).collect(),
     }))
+}
+
+fn top_viewer(contributor: &Contributor) -> crate::event::TopViewer {
+    crate::event::TopViewer {
+        rank: count(contributor.rank),
+        score: count(contributor.score),
+        delta: count(contributor.delta),
+        user: EventUser::normalize(contributor.user.as_ref()),
+    }
 }

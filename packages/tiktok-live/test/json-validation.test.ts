@@ -22,3 +22,22 @@ test('unsupported runtime formats fail loudly', () => {
     /Unsupported JSON Schema format: email/,
   );
 });
+
+test('boolean schemas are enforced, including local definitions', () => {
+  assert.deepEqual(validateJson({ ok: true }, true, 'boolean schema'), { ok: true });
+  assert.throws(
+    () => validateJson('anything', false, 'boolean schema'),
+    (error: unknown) => error instanceof JsonValidationError
+      && error.path === '$'
+      && error.expected === 'a value allowed by the schema',
+  );
+
+  const schema = {
+    $defs: {
+      enabled: { type: 'object', required: ['enabled'], properties: { enabled: { const: true } } },
+    },
+    $ref: '#/$defs/enabled',
+  } as const;
+  assert.deepEqual(validateJson({ enabled: true }, schema, 'definition'), { enabled: true });
+  assert.throws(() => validateJson({ enabled: false }, schema, 'definition'), JsonValidationError);
+});
