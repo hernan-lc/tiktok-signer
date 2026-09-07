@@ -109,7 +109,7 @@ End-to-end check, no browser:
 cargo run -p ttl-live-discovery --example live-check
 ```
 
-The workspace MSRV is Rust 1.86; CI runs the headless suite on that toolchain.
+The workspace MSRV is Rust 1.88; CI runs the headless suite on that toolchain.
 
 ### Controlled research
 

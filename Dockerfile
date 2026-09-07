@@ -5,8 +5,8 @@
 # went when the browser did; Node went when the JavaScript engine moved in-process. See
 # docs/07-deploy.md.
 
-# `rust-version` is 1.82, but the locked dependency tree needs more than the workspace does: the
-# 2024 edition (1.85) and `time` 0.3.55 (1.88). Pin the builder above both.
+# `rust-version` is 1.88, and the locked dependency tree needs the 2024 edition (1.85)
+# and `time` 0.3.55 (1.88). Pin the builder above both.
 FROM rust:1.90-bookworm AS builder
 
 WORKDIR /src

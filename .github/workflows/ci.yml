@@ -23,8 +23,8 @@ jobs:
         run: npm run check
       - name: Install workspace Rust toolchain
         run: |
-          rustup toolchain install 1.86 --profile minimal --component rustfmt --component clippy
-          rustup default 1.86
+          rustup toolchain install 1.88 --profile minimal --component rustfmt --component clippy
+          rustup default 1.88
       - name: Verify the workspace is browser-free
         run: |
           # The WebView is gone; nothing may reintroduce it. This checks the whole workspace
