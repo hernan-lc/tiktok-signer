@@ -57,7 +57,7 @@ fn has_node() -> bool {
         .arg("--version")
         .output()
         .is_ok_and(|out| out.status.success())
-    }
+}
 
 /// V8's answer for the same URL, product and profile.
 fn reference(bundle: &Path, url: &str, product: SigningProduct) -> String {
@@ -152,12 +152,8 @@ async fn pinning_decides_whether_a_signature_repeats() {
         "a pinned profile must be reproducible, or no differential means anything"
     );
 
-    let live = EmbeddedSigner::with_product(
-        source,
-        Profile::default(),
-        SigningProduct::WsDirect,
-    )
-    .expect("live signer");
+    let live = EmbeddedSigner::with_product(source, Profile::default(), SigningProduct::WsDirect)
+        .expect("live signer");
     assert_ne!(
         live.sign(url).await.unwrap(),
         pinned.sign(url).await.unwrap(),

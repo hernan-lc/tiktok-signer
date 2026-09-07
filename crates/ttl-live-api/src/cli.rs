@@ -215,8 +215,14 @@ mod tests {
 
     #[test]
     fn help_short_circuits() {
-        assert_eq!(CliArgs::parse_from(args(&["ttl-live-api", "--help"])), Err(CliExit::Help));
-        assert_eq!(CliArgs::parse_from(args(&["ttl-live-api", "-h"])), Err(CliExit::Help));
+        assert_eq!(
+            CliArgs::parse_from(args(&["ttl-live-api", "--help"])),
+            Err(CliExit::Help)
+        );
+        assert_eq!(
+            CliArgs::parse_from(args(&["ttl-live-api", "-h"])),
+            Err(CliExit::Help)
+        );
     }
 
     #[test]
@@ -281,7 +287,10 @@ mod tests {
                 bundle: Some(PathBuf::from("./cli-bundle.js")),
                 ..CliArgs::default()
             };
-            assert_eq!(cli.bundle_path(), absolutize(PathBuf::from("./cli-bundle.js")));
+            assert_eq!(
+                cli.bundle_path(),
+                absolutize(PathBuf::from("./cli-bundle.js"))
+            );
         });
         restore();
         assert!(outcome.is_ok());

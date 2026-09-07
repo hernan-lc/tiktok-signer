@@ -222,8 +222,9 @@ pub fn interpret_room_lookup(
     if !(200..300).contains(&status) {
         return Err(DiscoveryError::Status { status });
     }
-    let value: serde_json::Value = serde_json::from_str(body)
-        .map_err(|_| DiscoveryError::Decode(format!("unexpected lookup response for @{unique_id}")))?;
+    let value: serde_json::Value = serde_json::from_str(body).map_err(|_| {
+        DiscoveryError::Decode(format!("unexpected lookup response for @{unique_id}"))
+    })?;
     // Valid JSON without a user means the handle does not resolve. This check runs
     // before field parsing so only genuinely absent users — never a schema change,
     // which fails the parse above — take the not-found path.
@@ -486,7 +487,6 @@ mod tests {
             "https://example.invalid/webcast/gift/list/?room_id=1&X-Bogus=1"
         );
     }
-
 }
 
 // --- Signed discovery ---------------------------------------------------------------------

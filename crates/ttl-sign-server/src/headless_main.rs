@@ -23,8 +23,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use tracing::{info, warn};
 use ttl_live_discovery::UrlSigner;
-use ttl_sign_embedded::{EmbeddedSigner, Profile};
 use ttl_sign_core::{CookieJar, DevicePreset, LocationPreset, Preset, ScreenPreset};
+use ttl_sign_embedded::{EmbeddedSigner, Profile};
 use ttl_sign_headless::{HeadlessBackend, HeadlessConfig, TRANSPORT_PRODUCT};
 use ttl_sign_server::{router, AppState};
 

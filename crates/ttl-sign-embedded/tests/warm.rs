@@ -48,7 +48,8 @@ async fn every_product_signs_twice() {
         return;
     };
     let signer = EmbeddedSigner::new(source, Profile::default()).expect("prepare");
-    let fetch_url = "https://webcast.tiktok.com/webcast/im/fetch/?aid=1988&room_id=7300000000000000001";
+    let fetch_url =
+        "https://webcast.tiktok.com/webcast/im/fetch/?aid=1988&room_id=7300000000000000001";
 
     for product in [
         SigningProduct::FetchPatch,

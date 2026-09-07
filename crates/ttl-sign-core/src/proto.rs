@@ -570,7 +570,10 @@ impl PushFrame {
             .u64_field(enter_room_field::ROOM_ID, room_id)
             .u64_field(enter_room_field::LIVE_ID, LIVE_ID)
             .str_field(enter_room_field::IDENTITY, Identity::Audience.as_str())
-            .str_field(enter_room_field::FILTER_WELCOME_MSG, FILTER_WELCOME_DISABLED);
+            .str_field(
+                enter_room_field::FILTER_WELCOME_MSG,
+                FILTER_WELCOME_DISABLED,
+            );
 
         Self {
             payload_encoding: "pb".into(),

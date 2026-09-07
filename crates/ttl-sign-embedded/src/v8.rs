@@ -162,7 +162,9 @@ mod tests {
     #[test]
     fn the_entropy_pool_is_wired_up_and_refuses_to_wrap() {
         PLATFORM.call_once(|| JsRuntime::init_platform(None));
-        let tokio = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let tokio = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
         let runtime = {
             let _entered = tokio.enter();
             JsRuntime::new(RuntimeOptions::default())
@@ -170,7 +172,9 @@ mod tests {
         let mut engine = V8 { runtime, tokio };
         engine.run("ttl:pool.js", POOL_DRAW).expect("pool");
         engine.refill_pool().expect("fill");
-        engine.run("ttl:bootstrap.js", BOOTSTRAP).expect("bootstrap");
+        engine
+            .run("ttl:bootstrap.js", BOOTSTRAP)
+            .expect("bootstrap");
 
         let report = engine
             .call(

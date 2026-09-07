@@ -373,7 +373,10 @@ impl WsParams {
             .set("browser_platform", &d.browser_platform)
             .set("browser_version", &d.browser_version)
             .set("client_enter", "1")
-            .set("compress", self.compress.as_query_value().unwrap_or_default())
+            .set(
+                "compress",
+                self.compress.as_query_value().unwrap_or_default(),
+            )
             .set("cookie_enabled", "true")
             .set("cursor", &self.cursor)
             .set("device_platform", "web")
@@ -793,7 +796,8 @@ mod tests {
     fn direct_socket_url_is_the_reuse_supplement_path() {
         let params = DirectSocketParams::new("7000000000000000000");
         let url = params.url(&preset());
-        assert!(url.starts_with("wss://webcast-ws.tiktok.com/webcast/im/ws_proxy/ws_reuse_supplement/?"));
+        assert!(url
+            .starts_with("wss://webcast-ws.tiktok.com/webcast/im/ws_proxy/ws_reuse_supplement/?"));
         // Unencoded, because the signature covers these bytes.
         assert!(url.contains("tz_name=America/New_York"));
     }
@@ -830,8 +834,14 @@ mod tests {
             "the player now encodes its query; Query::encode_raw would sign the wrong bytes"
         );
 
-        assert_eq!(facts["direct_socket_path"], serde_json::json!(WS_REUSE_PATH));
-        assert_eq!(facts["sdk_version_code"], serde_json::json!(WS_VERSION_CODE));
+        assert_eq!(
+            facts["direct_socket_path"],
+            serde_json::json!(WS_REUSE_PATH)
+        );
+        assert_eq!(
+            facts["sdk_version_code"],
+            serde_json::json!(WS_VERSION_CODE)
+        );
         assert_eq!(
             facts["config_version_code"],
             serde_json::json!(TRAILING_VERSION_CODE)
@@ -858,5 +868,4 @@ mod tests {
         let ours: Vec<&str> = query.iter().take(expected.len()).map(|(k, _)| k).collect();
         assert_eq!(ours, expected, "the player's browser block changed shape");
     }
-
 }

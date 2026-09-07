@@ -162,12 +162,13 @@ async fn live_contract_accepts_only_unique_id_and_returns_descriptor() {
 
 #[tokio::test]
 async fn browser_preflight_is_answered_with_allow_headers() {
-    let response = request(router(live_service()), "OPTIONS", "/v1/connect", "")
-        .await;
+    let response = request(router(live_service()), "OPTIONS", "/v1/connect", "").await;
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     let headers = response.headers();
     assert_eq!(
-        headers.get("access-control-allow-origin").map(|v| v.to_str().unwrap()),
+        headers
+            .get("access-control-allow-origin")
+            .map(|v| v.to_str().unwrap()),
         Some("*"),
     );
     assert!(headers.contains_key("access-control-allow-methods"));

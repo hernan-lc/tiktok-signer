@@ -87,6 +87,9 @@ mod tests {
 
     #[test]
     fn non_ascii_is_encoded_per_utf8_byte() {
-        assert_eq!(sanitize_uri("wss://x.test/ws/?t=é"), "wss://x.test/ws/?t=%C3%A9");
+        assert_eq!(
+            sanitize_uri("wss://x.test/ws/?t=é"),
+            "wss://x.test/ws/?t=%C3%A9"
+        );
     }
 }

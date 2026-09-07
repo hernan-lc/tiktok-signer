@@ -483,7 +483,10 @@ mod tests {
                 .find(|(key, _)| key == name)
                 .map(|(_, value)| value.clone())
         };
-        assert_eq!(params.iter().filter(|(k, _)| k == "version_code").count(), 1);
+        assert_eq!(
+            params.iter().filter(|(k, _)| k == "version_code").count(),
+            1
+        );
         // Last wins, which is the same collapse the client performs on its own map.
         assert_eq!(by_name("version_code").as_deref(), Some("270000"));
         // Decoded, because the client encodes them again on the way out.

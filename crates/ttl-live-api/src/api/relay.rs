@@ -50,10 +50,7 @@ pub struct LiveParams {
 /// same JSON contract as `POST /v1/connect`, and only a live descriptor proceeds to the
 /// WebSocket handshake. Taking the raw request (instead of a `WebSocketUpgrade` extractor)
 /// keeps those JSON answers reachable for plain HTTP clients and tests.
-pub async fn live(
-    State(service): State<Arc<ConnectService>>,
-    request: Request<Body>,
-) -> Response {
+pub async fn live(State(service): State<Arc<ConnectService>>, request: Request<Body>) -> Response {
     live_inner(service, request).await
 }
 
@@ -72,10 +69,11 @@ async fn live_inner(service: Arc<ConnectService>, request: Request<Body>) -> Res
         _ => return error_response(ApiError::InvalidUniqueId, request_id),
     };
 
-    let customer_id = match service.authenticate(authorization(request.headers(), params.api_key).as_ref()) {
-        Ok(customer_id) => customer_id,
-        Err(error) => return error_response(error, request_id),
-    };
+    let customer_id =
+        match service.authenticate(authorization(request.headers(), params.api_key).as_ref()) {
+            Ok(customer_id) => customer_id,
+            Err(error) => return error_response(error, request_id),
+        };
     if let Err(error) = service.check_rate_limit(&customer_id, &unique_id).await {
         return error_response(error, request_id);
     }
@@ -226,8 +224,7 @@ fn is_upgrade(headers: &HeaderMap) -> bool {
 }
 
 fn request_id_header(request_id: u64) -> HeaderValue {
-    HeaderValue::from_str(&request_id.to_string())
-        .unwrap_or_else(|_| HeaderValue::from_static("0"))
+    HeaderValue::from_str(&request_id.to_string()).unwrap_or_else(|_| HeaderValue::from_static("0"))
 }
 
 /// The TikTok leg of the relay, with the ticket headers a browser could never send.
@@ -240,7 +237,9 @@ pub(crate) fn tiktok_request(descriptor: &ConnectionDescriptor) -> Result<Reques
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
     if !descriptor.url.starts_with("wss://") && !descriptor.url.starts_with("ws://") {
-        return Err(ApiError::Internal("live descriptor has an unsupported scheme".into()));
+        return Err(ApiError::Internal(
+            "live descriptor has an unsupported scheme".into(),
+        ));
     }
     let invalid = || ApiError::Internal("live descriptor headers are invalid".into());
     // The signed query carries raw spaces (the signature covers the unencoded bytes and
@@ -272,10 +271,12 @@ pub(crate) fn to_tiktok(message: BrowserMessage) -> Option<TiktokMessage> {
         BrowserMessage::Binary(bytes) => Some(TiktokMessage::Binary(bytes.to_vec().into())),
         BrowserMessage::Ping(bytes) => Some(TiktokMessage::Ping(bytes.to_vec().into())),
         BrowserMessage::Pong(bytes) => Some(TiktokMessage::Pong(bytes.to_vec().into())),
-        BrowserMessage::Close(frame) => Some(TiktokMessage::Close(frame.map(|frame| TiktokClose {
-            code: CloseCode::from(frame.code),
-            reason: frame.reason.to_string().into(),
-        }))),
+        BrowserMessage::Close(frame) => {
+            Some(TiktokMessage::Close(frame.map(|frame| TiktokClose {
+                code: CloseCode::from(frame.code),
+                reason: frame.reason.to_string().into(),
+            })))
+        }
     }
 }
 
@@ -285,10 +286,12 @@ pub(crate) fn to_browser(message: TiktokMessage) -> Option<BrowserMessage> {
         TiktokMessage::Binary(bytes) => Some(BrowserMessage::Binary(bytes.to_vec().into())),
         TiktokMessage::Ping(bytes) => Some(BrowserMessage::Ping(bytes.to_vec().into())),
         TiktokMessage::Pong(bytes) => Some(BrowserMessage::Pong(bytes.to_vec().into())),
-        TiktokMessage::Close(frame) => Some(BrowserMessage::Close(frame.map(|frame| BrowserClose {
-            code: u16::from(frame.code),
-            reason: frame.reason.to_string().into(),
-        }))),
+        TiktokMessage::Close(frame) => {
+            Some(BrowserMessage::Close(frame.map(|frame| BrowserClose {
+                code: u16::from(frame.code),
+                reason: frame.reason.to_string().into(),
+            })))
+        }
         TiktokMessage::Frame(_) => None,
     }
 }
@@ -316,15 +319,24 @@ mod tests {
         let request = tiktok_request(&descriptor()).unwrap();
         assert_eq!(request.uri().host(), Some("webcast-ws.tiktok.com"));
         assert_eq!(
-            request.headers().get(header::COOKIE).map(|v| v.to_str().unwrap()),
+            request
+                .headers()
+                .get(header::COOKIE)
+                .map(|v| v.to_str().unwrap()),
             Some("ttwid=fixture")
         );
         assert_eq!(
-            request.headers().get(header::USER_AGENT).map(|v| v.to_str().unwrap()),
+            request
+                .headers()
+                .get(header::USER_AGENT)
+                .map(|v| v.to_str().unwrap()),
             Some("fixture-agent")
         );
         assert_eq!(
-            request.headers().get(header::ORIGIN).map(|v| v.to_str().unwrap()),
+            request
+                .headers()
+                .get(header::ORIGIN)
+                .map(|v| v.to_str().unwrap()),
             Some("https://www.tiktok.com")
         );
     }
@@ -356,7 +368,10 @@ mod tests {
             Some(BrowserMessage::Text(echoed)) => assert_eq!(echoed.as_str(), "hi"),
             other => panic!("expected text, got {other:?}"),
         }
-        let close = BrowserMessage::Close(Some(BrowserClose { code: 1000, reason: "done".into() }));
+        let close = BrowserMessage::Close(Some(BrowserClose {
+            code: 1000,
+            reason: "done".into(),
+        }));
         match to_tiktok(close) {
             Some(TiktokMessage::Close(Some(frame))) => {
                 assert_eq!(u16::from(frame.code), 1000);

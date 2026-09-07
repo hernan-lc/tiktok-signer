@@ -143,7 +143,10 @@ impl ReconnectingConnection {
                 // the only question is whether to build another.
                 None => {
                     debug!(room_id = %self.room_id, "socket closed cleanly");
-                    match self.reconnect(WsError::Closed("closed by peer".into())).await {
+                    match self
+                        .reconnect(WsError::Closed("closed by peer".into()))
+                        .await
+                    {
                         Ok(()) => continue,
                         Err(error) => {
                             self.connection = None;
@@ -193,7 +196,9 @@ impl ReconnectingConnection {
                 }
                 // A refusal will be refused again. Failing here, with the reason, beats spending
                 // the remaining attempts to arrive at the same place with a timing error instead.
-                Err(error @ (StreamError::Refused(_) | StreamError::Signer(_))) => return Err(error),
+                Err(error @ (StreamError::Refused(_) | StreamError::Signer(_))) => {
+                    return Err(error)
+                }
                 Err(StreamError::Connect(error)) => {
                     warn!(room_id = %self.room_id, attempt, %error, "reconnect attempt failed");
                     last = error;
@@ -353,7 +358,9 @@ mod tests {
             .expect_err("a dead port cannot be reconnected to");
 
         match error {
-            StreamError::Exhausted { attempts: spent, .. } => assert_eq!(spent, 3),
+            StreamError::Exhausted {
+                attempts: spent, ..
+            } => assert_eq!(spent, 3),
             other => panic!("expected exhaustion, got {other}"),
         }
         // Re-signed once per attempt: reusing a stale URI is the failure this exists to avoid.

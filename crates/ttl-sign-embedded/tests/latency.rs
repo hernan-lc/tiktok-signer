@@ -34,12 +34,9 @@ macro_rules! measure {
             };
 
             let started = Instant::now();
-            let signer = <$signer>::with_product(
-                source,
-                Profile::default(),
-                SigningProduct::WsDirect,
-            )
-            .expect("prepare the signer");
+            let signer =
+                <$signer>::with_product(source, Profile::default(), SigningProduct::WsDirect)
+                    .expect("prepare the signer");
             let prepare = started.elapsed();
 
             let started = Instant::now();

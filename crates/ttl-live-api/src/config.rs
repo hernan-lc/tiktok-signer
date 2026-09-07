@@ -105,10 +105,7 @@ impl AppConfig {
 /// Whether a `host:port` bind address stays on this machine. Used for the startup
 /// warning when the broker would otherwise mint tickets for anyone on the network.
 pub fn binds_loopback(bind: &str) -> bool {
-    let host = bind
-        .rsplit_once(':')
-        .map(|(host, _)| host)
-        .unwrap_or(bind);
+    let host = bind.rsplit_once(':').map(|(host, _)| host).unwrap_or(bind);
     let host = host.trim().trim_matches(|c| c == '[' || c == ']');
     host.eq_ignore_ascii_case("localhost")
         || host == "::1"
@@ -116,7 +113,8 @@ pub fn binds_loopback(bind: &str) -> bool {
         || host.starts_with("127.")
 }
 
-fn env_string(name: &str, default: String) -> String {    std::env::var(name)
+fn env_string(name: &str, default: String) -> String {
+    std::env::var(name)
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(default)
@@ -189,7 +187,8 @@ mod tests {
     }
 
     #[test]
-    fn api_keys_are_parsed_without_exposing_values_in_labels() {        let keys = parse_api_keys(Some("secret-a=acme,secret-b, ,secret-c= team "));
+    fn api_keys_are_parsed_without_exposing_values_in_labels() {
+        let keys = parse_api_keys(Some("secret-a=acme,secret-b, ,secret-c= team "));
         assert_eq!(keys.get("secret-a"), Some(&"acme".to_string()));
         assert_eq!(keys.get("secret-b"), Some(&"api-key".to_string()));
         assert_eq!(keys.get("secret-c"), Some(&"team".to_string()));

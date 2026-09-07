@@ -140,7 +140,10 @@ mod tests {
     #[test]
     fn only_an_absent_user_may_resolve_to_not_found() {
         assert!(matches!(
-            classify("creator", Err(DiscoveryError::UserNotFound("creator".into()))),
+            classify(
+                "creator",
+                Err(DiscoveryError::UserNotFound("creator".into()))
+            ),
             Ok(RoomResolution::NotFound)
         ));
         // Every other failure shape stays an error, even the ones that used to share

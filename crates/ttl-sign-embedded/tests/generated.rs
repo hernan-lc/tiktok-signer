@@ -27,7 +27,10 @@ fn the_committed_bootstrap_matches_the_shim() {
         return;
     }
     let temporary = std::env::temp_dir().join("ttl-bootstrap-freshness.js");
-    let generated = Command::new("node").arg(&generator).arg(&temporary).output();
+    let generated = Command::new("node")
+        .arg(&generator)
+        .arg(&temporary)
+        .output();
     let Ok(output) = generated else {
         eprintln!("skipped: node is not available");
         return;
@@ -43,8 +46,7 @@ fn the_committed_bootstrap_matches_the_shim() {
     let _ = std::fs::remove_file(&temporary);
 
     assert_eq!(
-        fresh,
-        shipped,
+        fresh, shipped,
         "crates/ttl-sign-embedded/bootstrap.js is stale. Regenerate it:\n  \
          node scripts/headless/tools/build-bootstrap.mjs crates/ttl-sign-embedded/bootstrap.js"
     );

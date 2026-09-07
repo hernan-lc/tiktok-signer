@@ -6,7 +6,7 @@
 use rand::RngCore;
 use rquickjs::{Context, Function, Runtime};
 
-use crate::{Engine, EmbeddedError, BOOTSTRAP};
+use crate::{EmbeddedError, Engine, BOOTSTRAP};
 
 /// A prepared QuickJS context. Lives on the signer's thread; never crosses one.
 pub struct QuickJs {
@@ -78,7 +78,9 @@ fn describe(ctx: &rquickjs::Ctx, error: rquickjs::Error) -> String {
     }
     let value = ctx.catch();
     match value.as_exception() {
-        Some(exception) => exception.message().unwrap_or_else(|| "unknown error".into()),
+        Some(exception) => exception
+            .message()
+            .unwrap_or_else(|| "unknown error".into()),
         None => "unknown error".into(),
     }
 }

@@ -27,8 +27,8 @@ use ttl_live_ws::{ConnectConfig, ReconnectPolicy, ReconnectingConnection};
 
 use ttl_live_discovery::{DiscoveryClient, DiscoveryError, UrlSigner};
 use ttl_sign_core::{
-    CookieJar, DevicePreset, LocationPreset, Preset, ScreenPreset, DIRECT_SOCKET_HOST as SOCKET_HOST,
-    WS_REUSE_PATH,
+    CookieJar, DevicePreset, LocationPreset, Preset, ScreenPreset,
+    DIRECT_SOCKET_HOST as SOCKET_HOST, WS_REUSE_PATH,
 };
 use ttl_sign_embedded::{EmbeddedSigner, Profile};
 use ttl_sign_headless::{HeadlessBackend, HeadlessConfig, TRANSPORT_PRODUCT};
@@ -167,7 +167,10 @@ async fn main() {
         eprintln!("\nFAILED: could not read {bundle}: {error}");
         std::process::exit(1);
     });
-    println!("      signing in-process with {}", ttl_sign_embedded::ENGINE);
+    println!(
+        "      signing in-process with {}",
+        ttl_sign_embedded::ENGINE
+    );
     let signer: Box<dyn UrlSigner> = Box::new(
         EmbeddedSigner::with_product(
             source,
@@ -183,16 +186,14 @@ async fn main() {
             std::process::exit(1);
         }),
     );
-    let backend = match HeadlessBackend::new(
-        HeadlessConfig::new(preset.clone(), jar.clone()),
-        signer,
-    ) {
-        Ok(backend) => backend,
-        Err(error) => {
-            eprintln!("\nFAILED: could not build the signing backend: {error}");
-            std::process::exit(1);
-        }
-    };
+    let backend =
+        match HeadlessBackend::new(HeadlessConfig::new(preset.clone(), jar.clone()), signer) {
+            Ok(backend) => backend,
+            Err(error) => {
+                eprintln!("\nFAILED: could not build the signing backend: {error}");
+                std::process::exit(1);
+            }
+        };
 
     // A reconnecting stream, because a signature ages out and a room can restart its push server.
     // Five attempts with a doubling backoff; a refusal is reported rather than retried.
