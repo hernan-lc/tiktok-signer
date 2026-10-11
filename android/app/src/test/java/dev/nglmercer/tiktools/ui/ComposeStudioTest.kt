@@ -40,6 +40,14 @@ class ComposeStudioTest {
     }
 
     @Test
+    @Config(sdk = [35], application = Application::class, qualifiers = "es-w393dp-h852dp")
+    fun homeUsesSpanishResourcesWhenSpanishIsSelected() {
+        compose.setContent { TikToolsTheme { HomeScreen(HomeUiState(), {}) } }
+        compose.onNodeWithText("Usuario de TikTok").assertIsDisplayed()
+        compose.onNodeWithText("Conectar").assertIsDisplayed()
+    }
+
+    @Test
     fun liveHomeSnapshotAndDisconnect() {
         var disconnected = false
         compose.setContent {

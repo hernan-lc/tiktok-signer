@@ -14,31 +14,33 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
 /** One container per application, independent of navigation and Activity recreation. */
-class AppContainer(private val context: Context) {
+class AppContainer(context: Context) {
+    val context: Context = context.applicationContext
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    val preferences = PreferencesRepository(context, scope)
-    val database = DatabaseFactory.open(context)
+    val preferences = PreferencesRepository(this.context, scope)
+    val database = DatabaseFactory.open(this.context)
     val points = PointsRepository(database, preferences, scope)
     val actions = ActionsRepository(database, scope)
     val events = EventsRepository()
-    val tts = TtsRepository(context, preferences, scope)
+    val tts = TtsRepository(this.context, preferences, scope)
     val discovery = DiscoveryRepository()
     val live =
         LiveSessionManager(
             discovery,
-            NativeLiveTransport(context),
+            NativeLiveTransport(this.context),
             object : SessionKeepAlive {
                 override fun start(room: String, speech: Boolean) {
-                    LiveService.start(context, room, speech)
+                    LiveService.start(this@AppContainer.context, room, speech)
                 }
 
                 override fun refresh(room: String, speech: Boolean) {
-                    if (LiveService.running) LiveService.refresh(context, room, speech)
-                    else LiveService.start(context, room, speech)
+                    if (LiveService.running)
+                        LiveService.refresh(this@AppContainer.context, room, speech)
+                    else LiveService.start(this@AppContainer.context, room, speech)
                 }
 
                 override fun stop() {
-                    LiveService.stop(context)
+                    LiveService.stop(this@AppContainer.context)
                 }
             },
             scope,
@@ -67,6 +69,11 @@ class AppContainer(private val context: Context) {
                 } catch (e: Exception) {
                     Logger.append("REWARDS", e.message.orEmpty())
                 }
+            }
+        }
+        scope.launch {
+            live.state.collect { state ->
+                if (state !is LiveSessionState.Connected) tts.resetChatSpeaker()
             }
         }
         scope.launch { LiveService.disconnectRequests.collect { live.disconnect("Notification") } }

@@ -1,30 +1,33 @@
 package dev.nglmercer.tiktools.feature.settings
 
 import android.content.Context
+import dev.nglmercer.tiktools.R
 import dev.nglmercer.tiktools.app.AppContainer
 import dev.nglmercer.tiktools.core.diagnostics.Logger
 import dev.nglmercer.tiktools.core.nativebridge.RustSigner
 import dev.nglmercer.tiktools.core.network.BundleFetch
 import dev.nglmercer.tiktools.data.preferences.*
 import dev.nglmercer.tiktools.feature.StudioViewModel
+import dev.nglmercer.tiktools.live.localizedLabel
 import dev.nglmercer.tiktools.tts.TtsEngine
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
 data class Diagnostics(
-    val native: String = "Loading…",
+    val native: String = "",
     val bundle: String = "",
     val guest: String = "",
     val logs: String = "",
 )
 
 class SettingsViewModel(private val app: AppContainer, private val context: Context) :
-    StudioViewModel() {
+    StudioViewModel(context) {
     val preferences = app.preferences.state
     val models = app.tts.models
     val voice = app.tts.voice
     val lastSpoken = app.tts.lastSpoken
-    private val _diagnostics = MutableStateFlow(Diagnostics())
+    private val _diagnostics =
+        MutableStateFlow(Diagnostics(native = context.getString(R.string.diagnostics_loading)))
     val diagnostics = _diagnostics.asStateFlow()
     private val listener =
         object : Logger.Listener {
@@ -91,7 +94,7 @@ class SettingsViewModel(private val app: AppContainer, private val context: Cont
     fun clearBundle() = task {
         withContext(Dispatchers.IO) {
             val file = BundleFetch.cacheFile(context.cacheDir)
-            check(!file.exists() || file.delete()) { "Could not remove cached bundle" }
+            check(!file.exists() || file.delete()) { context.getString(R.string.error_remove_bundle) }
         }
         refreshDiagnostics()
     }
@@ -107,11 +110,26 @@ class SettingsViewModel(private val app: AppContainer, private val context: Cont
                 Diagnostics(
                     native =
                         runCatching { RustSigner.version() }
-                            .getOrElse { "Unavailable: ${it.message}" },
+                            .getOrElse {
+                                context.getString(
+                                    R.string.diagnostics_native_unavailable,
+                                    it.message.orEmpty(),
+                                )
+                            },
                     bundle =
-                        "${BundleFetch.BUNDLE_VERSION} · ${cache?.sizeBytes ?: 0} bytes · ${if(cache?.shaOk==true) "SHA256 verified" else "Not cached"}",
+                        context.getString(
+                            R.string.diagnostics_bundle_summary,
+                            BundleFetch.BUNDLE_VERSION,
+                            cache?.sizeBytes ?: 0,
+                            context.getString(
+                                if (cache?.shaOk == true) R.string.diagnostics_sha_verified
+                                else R.string.diagnostics_not_cached
+                            ),
+                        ),
                     guest =
-                        app.discovery.cookieNames().joinToString().ifEmpty { "No guest session" },
+                        app.discovery.cookieNames().joinToString().ifEmpty {
+                            context.getString(R.string.diagnostics_no_guest)
+                        },
                     logs = Logger.snapshot(),
                 )
             }
@@ -119,5 +137,13 @@ class SettingsViewModel(private val app: AppContainer, private val context: Cont
     }
 
     fun exportText(): String =
-        "TikTools Studio 1.2\n${app.live.state.value}\nNative: ${diagnostics.value.native}\nBundle: ${diagnostics.value.bundle}\nGuest cookie names: ${diagnostics.value.guest}\n\n${diagnostics.value.logs}"
+        context.getString(
+            R.string.diagnostics_export_template,
+            context.getString(R.string.app_name),
+            app.live.state.value.localizedLabel(context),
+            diagnostics.value.native,
+            diagnostics.value.bundle,
+            diagnostics.value.guest,
+            diagnostics.value.logs,
+        )
 }

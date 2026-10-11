@@ -11,6 +11,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.nglmercer.tiktools.R
 import dev.nglmercer.tiktools.core.model.LiveEvent
 import dev.nglmercer.tiktools.data.actions.*
 import dev.nglmercer.tiktools.ui.components.*
@@ -27,14 +28,14 @@ fun ActionsScreen(vm: ActionsViewModel) {
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item {
-            SectionHeader("Automations") {
+            SectionHeader(tr(R.string.actions_automations)) {
                 IconButton(
                     onClick = {
                         vm.dismissError()
                         editId = 0
                     }
                 ) {
-                    Icon(Icons.Outlined.Add, "New automation")
+                    Icon(Icons.Outlined.Add, tr(R.string.actions_new))
                 }
             }
             ErrorBanner(error, vm::dismissError)
@@ -42,13 +43,17 @@ fun ActionsScreen(vm: ActionsViewModel) {
         if (state.actions.isEmpty())
             item {
                 EmptyState(
-                    "No automations yet",
-                    "Choose an event and the HTTP request it should trigger",
+                    tr(R.string.actions_empty),
+                    tr(R.string.actions_empty_hint),
                     Icons.Outlined.Bolt,
                 )
             }
         items(state.actions, key = { it.id }) { action ->
             val last = state.runs.firstOrNull { it.actionId == action.id }
+            val triggerNames = mutableListOf<String>()
+            for (category in action.triggers.sortedBy { it.ordinal }) {
+                triggerNames.add(category.localizedName())
+            }
             Row(
                 Modifier.fillMaxWidth()
                     .clickable {
@@ -69,29 +74,29 @@ fun ActionsScreen(vm: ActionsViewModel) {
                 Column(Modifier.weight(1f)) {
                     Text(action.name, style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "${action.triggerSummary()}${if(action.giftName.isNotBlank()) " · ${action.giftName}" else ""} · ${action.method}",
+                        "${triggerNames.joinToString(" + ")}${if(action.giftName.isNotBlank()) " · ${action.giftName}" else ""} · ${action.method}",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Text(
-                        if (last == null) "No recent runs"
-                        else "${last.status} · ${eventTime(last.at)}",
+                        if (last == null) tr(R.string.actions_no_recent_runs)
+                        else "${runStatus(last.status)} · ${localizedEventTime(last.at)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 IconButton(onClick = { vm.test(action) }) {
-                    Icon(Icons.Outlined.PlayArrow, "Test ${action.name}")
+                    Icon(Icons.Outlined.PlayArrow, tr(R.string.actions_test_named, action.name))
                 }
                 Switch(action.enabled, { vm.enable(action, it) })
             }
             HorizontalDivider()
         }
-        item { SectionHeader("Execution history") }
-        if (state.runs.isEmpty()) item { EmptyState("No executions yet") }
+        item { SectionHeader(tr(R.string.actions_history)) }
+        if (state.runs.isEmpty()) item { EmptyState(tr(R.string.actions_no_executions)) }
         items(state.runs, key = { it.id }) { run ->
             Column(Modifier.padding(vertical = 8.dp)) {
                 Text(
-                    "${eventTime(run.at)} · ${state.actions.firstOrNull { it.id==run.actionId }?.name ?: "Automation ${run.actionId}"} · ${run.status} · ${run.ms} ms",
+                    "${localizedEventTime(run.at)} · ${state.actions.firstOrNull { it.id==run.actionId }?.name ?: "${tr(R.string.actions_automations)} ${run.actionId}"} · ${runStatus(run.status)} · ${run.ms} ms",
                     style = MaterialTheme.typography.labelLarge,
                 )
                 Text(
@@ -120,7 +125,7 @@ fun ActionsScreen(vm: ActionsViewModel) {
     deleting?.let { action ->
         AlertDialog(
             onDismissRequest = { deleting = null },
-            title = { Text("Delete ${action.name}?") },
+            title = { Text(tr(R.string.actions_delete_title, action.name)) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -129,10 +134,12 @@ fun ActionsScreen(vm: ActionsViewModel) {
                         editId = null
                     }
                 ) {
-                    Text("Delete")
+                    Text(tr(R.string.actions_delete))
                 }
             },
-            dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } },
+            dismissButton = {
+                TextButton(onClick = { deleting = null }) { Text(tr(R.string.cancel)) }
+            },
         )
     }
 }
@@ -175,7 +182,7 @@ private fun AutomationEditor(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text(
-            if (original.id == 0L) "New automation" else "Edit automation",
+            tr(if (original.id == 0L) R.string.actions_new else R.string.actions_edit),
             style = MaterialTheme.typography.headlineMedium,
         )
         ErrorBanner(error)
@@ -183,10 +190,10 @@ private fun AutomationEditor(
             name,
             { name = it },
             Modifier.fillMaxWidth(),
-            label = { Text("Name") },
+            label = { Text(tr(R.string.actions_name)) },
             singleLine = true,
         )
-        SectionHeader("When")
+        SectionHeader(tr(R.string.actions_when))
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             items(LiveEvent.Category.entries) { c ->
                 FilterChip(
@@ -197,7 +204,7 @@ private fun AutomationEditor(
                                 categories.filter { it != c.name }.toTypedArray()
                             else categories + c.name
                     },
-                    label = { Text(c.name.lowercase()) },
+                    label = { Text(c.localizedName()) },
                     leadingIcon = { Icon(c.icon(), null, Modifier.size(16.dp)) },
                 )
             }
@@ -207,11 +214,11 @@ private fun AutomationEditor(
                 gift,
                 { gift = it },
                 Modifier.fillMaxWidth(),
-                label = { Text("Gift name (optional)") },
-                supportingText = { Text("Leave blank to match every gift") },
+                label = { Text(tr(R.string.actions_gift_name)) },
+                supportingText = { Text(tr(R.string.actions_gift_match_hint)) },
                 singleLine = true,
             )
-        SectionHeader("Do · HTTP request")
+        SectionHeader(tr(R.string.actions_do_http))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for (m in EventAction.Method.entries) FilterChip(
                 method == m.name,
@@ -223,7 +230,7 @@ private fun AutomationEditor(
             url,
             { url = it },
             Modifier.fillMaxWidth(),
-            label = { Text("HTTP or HTTPS URL") },
+            label = { Text(tr(R.string.actions_http_url)) },
             singleLine = true,
         )
         if (method == "POST")
@@ -231,19 +238,19 @@ private fun AutomationEditor(
                 body,
                 { body = it },
                 Modifier.fillMaxWidth(),
-                label = { Text("JSON body") },
+                label = { Text(tr(R.string.actions_json_body)) },
                 minLines = 2,
                 maxLines = 5,
             )
         Text(
-            "Templates: {{user}}, {{name}}, {{text}}, {{type}}, {{count}}, {{diamonds}}",
+            tr(R.string.actions_templates),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         OutlinedTextField(
             cooldown,
             { cooldown = it },
-            label = { Text("Cooldown in seconds") },
+            label = { Text(tr(R.string.actions_cooldown)) },
             keyboardOptions =
                 androidx.compose.foundation.text.KeyboardOptions(
                     keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
@@ -253,13 +260,13 @@ private fun AutomationEditor(
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (onDelete != null)
                 IconButton(onClick = onDelete) {
-                    Icon(Icons.Outlined.DeleteOutline, "Delete automation")
+                    Icon(Icons.Outlined.DeleteOutline, tr(R.string.actions_delete))
                 }
             OutlinedButton(
                 onClick = { onTest(draft()) },
                 enabled = url.isNotBlank() && categories.isNotEmpty(),
             ) {
-                Text("Test")
+                Text(tr(R.string.actions_test))
             }
             Button(
                 onClick = { onSave(draft()) },
@@ -270,8 +277,18 @@ private fun AutomationEditor(
                         categories.isNotEmpty() &&
                         (cooldown.toLongOrNull() ?: -1) >= 0,
             ) {
-                Text("Save")
+                Text(tr(R.string.actions_save))
             }
         }
     }
 }
+
+@Composable
+private fun runStatus(status: String): String =
+    tr(
+        when (status) {
+            "ok" -> R.string.actions_status_ok
+            "error" -> R.string.actions_status_error
+            else -> R.string.not_provided
+        }
+    )

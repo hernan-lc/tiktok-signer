@@ -2,6 +2,7 @@ package dev.nglmercer.tiktools.feature.home
 
 import androidx.lifecycle.viewModelScope
 import dev.nglmercer.tiktools.app.AppContainer
+import dev.nglmercer.tiktools.R
 import dev.nglmercer.tiktools.core.model.*
 import dev.nglmercer.tiktools.data.events.LiveStats
 import dev.nglmercer.tiktools.data.preferences.UserPreferences
@@ -23,7 +24,7 @@ data class HomeUiState(
     val feed: FeedState = FeedState(),
 )
 
-class HomeViewModel(private val app: AppContainer) : StudioViewModel() {
+class HomeViewModel(private val app: AppContainer) : StudioViewModel(app.context) {
     private val feed = MutableStateFlow(FeedState())
     val state =
         combine(
@@ -47,7 +48,14 @@ class HomeViewModel(private val app: AppContainer) : StudioViewModel() {
         try {
             feed.value = FeedState(app.discovery.feed())
         } catch (e: Exception) {
-            feed.value = feed.value.copy(loading = false, error = e.message)
+            val detail = e.message?.takeIf(String::isNotBlank)
+            feed.value =
+                feed.value.copy(
+                    loading = false,
+                    error =
+                        detail?.let { app.context.getString(R.string.feed_load_failed, it) }
+                            ?: app.context.getString(R.string.feed_load_failed_generic),
+                )
             throw e
         }
     }

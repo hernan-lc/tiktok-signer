@@ -58,4 +58,19 @@ class SpeechTextTest {
             SpeechText.forEvent(LiveEvent(LiveEvent.Category.CHAT, "ay", "Ay", "  ", 0, 0)),
         )
     }
+
+    @Test
+    fun chatNameCanBeSuppressedAndPrefixCanBeLocalizedOrCustomized() {
+        val chat = LiveEvent(LiveEvent.Category.CHAT, "ay", "Ay", "hello!", 0, 0)
+        assertEquals("hello!", SpeechText.forEvent(chat, includeChatName = false))
+        assertEquals("Ay dice: hello!", SpeechText.forEvent(chat, chatPrefix = "dice"))
+        assertEquals(
+            "Ay dice: hello!",
+            SpeechText.forEvent(
+                chat,
+                chatPrefix = "",
+                phrases = SpeechPhrases("dice", "envió", "un regalo", "siguió", "compartió el LIVE", "se unió", "alguien"),
+            ),
+        )
+    }
 }

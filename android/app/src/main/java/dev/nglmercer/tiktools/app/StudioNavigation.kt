@@ -7,18 +7,20 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.*
+import dev.nglmercer.tiktools.R
 
-data class StudioDestination(val route: String, val label: String, val icon: ImageVector)
+data class StudioDestination(val route: String, val label: Int, val icon: ImageVector)
 
 private val destinations =
     listOf(
-        StudioDestination("home", "Home", Icons.Outlined.Home),
-        StudioDestination("events", "Events", Icons.Outlined.ChatBubbleOutline),
-        StudioDestination("actions", "Actions", Icons.Outlined.Bolt),
-        StudioDestination("rewards", "Rewards", Icons.Outlined.EmojiEvents),
+        StudioDestination("home", R.string.nav_home, Icons.Outlined.Home),
+        StudioDestination("events", R.string.nav_events, Icons.Outlined.ChatBubbleOutline),
+        StudioDestination("actions", R.string.nav_actions, Icons.Outlined.Bolt),
+        StudioDestination("rewards", R.string.nav_rewards, Icons.Outlined.EmojiEvents),
     )
 
 /** Stateless screen slots make navigation testable without loading JNI or accessing TikTok. */
@@ -59,24 +61,24 @@ fun StudioNavigation(
                         current == d.route,
                         onClick = { open(d.route) },
                         icon = { Icon(d.icon, null) },
-                        label = { Text(d.label) },
+                        label = { Text(stringResource(d.label)) },
                     )
                 }
             Scaffold(
                 Modifier.weight(1f),
                 topBar = {
                     TopAppBar(
-                        title = { Text("TikTools") },
+                        title = { Text(stringResource(R.string.app_name)) },
                         navigationIcon = {
                             if (!topLevel)
                                 IconButton(onClick = { nav.popBackStack() }) {
-                                    Icon(Icons.Outlined.ArrowBack, "Back")
+                                    Icon(Icons.Outlined.ArrowBack, stringResource(R.string.nav_back))
                                 }
                         },
                         actions = {
                             if (topLevel)
                                 IconButton(onClick = { open("settings") }) {
-                                    Icon(Icons.Outlined.Settings, "Settings")
+                                    Icon(Icons.Outlined.Settings, stringResource(R.string.nav_settings))
                                 }
                         },
                     )
@@ -88,7 +90,7 @@ fun StudioNavigation(
                                 current == d.route,
                                 onClick = { open(d.route) },
                                 icon = { Icon(d.icon, null) },
-                                label = { Text(d.label) },
+                                label = { Text(stringResource(d.label)) },
                             )
                         }
                 },

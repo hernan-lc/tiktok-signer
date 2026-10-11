@@ -5,7 +5,7 @@ import dev.nglmercer.tiktools.core.model.LiveEvent
 import dev.nglmercer.tiktools.data.actions.EventAction
 import dev.nglmercer.tiktools.feature.StudioViewModel
 
-class ActionsViewModel(private val app: AppContainer) : StudioViewModel() {
+class ActionsViewModel(private val app: AppContainer) : StudioViewModel(app.context) {
     val state = app.actions.state
 
     fun save(value: EventAction, onSaved: () -> Unit) = task {

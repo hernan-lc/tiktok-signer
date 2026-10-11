@@ -12,6 +12,7 @@ import androidx.compose.ui.platform.*
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.nglmercer.tiktools.R
 import dev.nglmercer.tiktools.ui.components.*
 import kotlinx.coroutines.*
 
@@ -45,31 +46,33 @@ fun DiagnosticsScreen(vm: SettingsViewModel) {
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item {
-            Text("Diagnostics", style = MaterialTheme.typography.headlineMedium)
+            Text(tr(R.string.diagnostics), style = MaterialTheme.typography.headlineMedium)
             ErrorBanner(error ?: exportError) {
                 vm.dismissError()
                 exportError = null
             }
-            SettingItem("Native", d.native)
-            SettingItem("Bundle", d.bundle)
-            SettingItem("Guest session", d.guest)
+            SettingItem(tr(R.string.diagnostics_native), d.native)
+            SettingItem(tr(R.string.settings_bundle_label), d.bundle)
+            SettingItem(tr(R.string.guest_session), d.guest)
         }
         item {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { clipboard.setText(AnnotatedString(vm.exportText())) }) {
-                    Text("Copy diagnostics")
+                    Text(tr(R.string.diagnostics_copy))
                 }
                 OutlinedButton(onClick = { export.launch("tiktools-diagnostics.txt") }) {
-                    Text("Export logs")
+                    Text(tr(R.string.diagnostics_export))
                 }
-                TextButton(onClick = vm::clearLogs) { Text("Clear logs") }
-                TextButton(onClick = vm::refreshDiagnostics) { Text("Refresh") }
+                TextButton(onClick = vm::clearLogs) { Text(tr(R.string.diagnostics_clear)) }
+                TextButton(onClick = vm::refreshDiagnostics) {
+                    Text(tr(R.string.diagnostics_refresh))
+                }
             }
         }
         item {
-            SectionHeader("Logs")
+            SectionHeader(tr(R.string.diagnostics_logs))
             SelectionContainer {
-                Text(d.logs.ifBlank { "No logs" }, style = MaterialTheme.typography.bodySmall)
+                Text(d.logs.ifBlank { tr(R.string.diagnostics_no_logs) }, style = MaterialTheme.typography.bodySmall)
             }
         }
     }

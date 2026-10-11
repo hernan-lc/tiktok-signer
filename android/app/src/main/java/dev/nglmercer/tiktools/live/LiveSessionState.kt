@@ -1,5 +1,7 @@
 package dev.nglmercer.tiktools.live
 
+import android.content.Context
+import dev.nglmercer.tiktools.R
 import dev.nglmercer.tiktools.core.model.Creator
 
 sealed interface LiveSessionState {
@@ -27,17 +29,16 @@ fun LiveSessionState.creator(): Creator? =
         is LiveSessionState.Reconnecting -> creator
         else -> null
     }
-
 val LiveSessionState.isActive: Boolean
     get() = this !is LiveSessionState.Disconnected && this !is LiveSessionState.Failed
 
-fun LiveSessionState.label(): String =
+fun LiveSessionState.localizedLabel(context: Context): String =
     when (this) {
-        LiveSessionState.Disconnected -> "Offline"
-        is LiveSessionState.Resolving -> "Looking up @$username…"
-        is LiveSessionState.Preparing -> "Preparing session…"
-        is LiveSessionState.Connecting -> "Connecting to LIVE…"
-        is LiveSessionState.Connected -> "LIVE"
-        is LiveSessionState.Reconnecting -> "Reconnecting · attempt $attempt"
-        is LiveSessionState.Failed -> "Connection failed"
+        LiveSessionState.Disconnected -> context.getString(R.string.status_offline)
+        is LiveSessionState.Resolving -> context.getString(R.string.status_resolving, username)
+        is LiveSessionState.Preparing -> context.getString(R.string.status_preparing)
+        is LiveSessionState.Connecting -> context.getString(R.string.status_connecting)
+        is LiveSessionState.Connected -> context.getString(R.string.status_live)
+        is LiveSessionState.Reconnecting -> context.getString(R.string.status_reconnecting, attempt)
+        is LiveSessionState.Failed -> context.getString(R.string.status_failed)
     }

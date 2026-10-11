@@ -1,10 +1,16 @@
 package dev.nglmercer.tiktools.feature.settings
 
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import dev.nglmercer.tiktools.R
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.nglmercer.tiktools.data.preferences.ThemeMode
@@ -13,38 +19,39 @@ import dev.nglmercer.tiktools.ui.components.*
 
 @Composable
 fun SettingsScreen(vm: SettingsViewModel, navigate: (String) -> Unit) {
+    val context = LocalContext.current
     val p = vm.preferences.collectAsStateWithLifecycle().value
     val diagnostics = vm.diagnostics.collectAsStateWithLifecycle().value
     val error = vm.error.collectAsStateWithLifecycle().value
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp)) {
         item {
-            Text("Settings", style = MaterialTheme.typography.headlineMedium)
+            Text(tr(R.string.settings_title), style = MaterialTheme.typography.headlineMedium)
             ErrorBanner(error, vm::dismissError)
         }
         item {
-            SectionHeader("LIVE")
+            SectionHeader(tr(R.string.settings_live))
             SettingSwitch(
-                "Automatic reconnect",
+                tr(R.string.automatic_reconnect),
                 p.reconnect,
                 vm::reconnect,
-                "Uses the native transport's retry policy",
+                tr(R.string.native_retry_policy),
             )
             SettingSwitch(
-                "Background connection",
+                tr(R.string.background_connection),
                 p.backgroundConnection,
                 vm::background,
-                "Keep the LIVE session and speech running with a notification",
+                tr(R.string.background_connection_detail),
             )
             HorizontalDivider()
         }
         item {
-            SectionHeader("Speech")
+            SectionHeader(tr(R.string.settings_speech))
             SettingItem(
-                "Engine",
+                tr(R.string.settings_engine),
                 when (p.engine) {
-                    TtsEngine.OFF -> "Off"
-                    TtsEngine.DEVICE -> "Device voice"
-                    TtsEngine.SUPERTONIC -> "SuperTonic 3"
+                    TtsEngine.OFF -> tr(R.string.speech_off)
+                    TtsEngine.DEVICE -> tr(R.string.speech_device_voice)
+                    TtsEngine.SUPERTONIC -> tr(R.string.speech_engine_super)
                 },
             ) {
                 navigate("speech")
@@ -52,44 +59,70 @@ fun SettingsScreen(vm: SettingsViewModel, navigate: (String) -> Unit) {
             HorizontalDivider()
         }
         item {
-            SectionHeader("Appearance")
+            SectionHeader(tr(R.string.appearance))
             for (mode in ThemeMode.entries) Row(
                 verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
             ) {
                 RadioButton(p.theme == mode, { vm.theme(mode) })
-                Text(mode.name.lowercase().replaceFirstChar(Char::uppercase))
+                Text(
+                    tr(
+                        when (mode) {
+                            ThemeMode.SYSTEM -> R.string.theme_system
+                            ThemeMode.LIGHT -> R.string.theme_light
+                            ThemeMode.DARK -> R.string.theme_dark
+                        }
+                    )
+                )
+            }
+            SettingItem(
+                tr(R.string.app_language),
+                tr(
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+                        R.string.app_language_system_settings
+                    else R.string.app_language_follows_device
+                ),
+            ) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    context.startActivity(
+                        Intent(Settings.ACTION_APP_LOCALE_SETTINGS).apply {
+                            data = Uri.fromParts("package", context.packageName, null)
+                        }
+                    )
+                }
             }
             HorizontalDivider()
         }
         item {
-            SectionHeader("Session")
-            SettingItem("Guest session", diagnostics.guest)
-            TextButton(onClick = vm::resetSession) { Text("Reset guest session") }
+            SectionHeader(tr(R.string.settings_session))
+            SettingItem(tr(R.string.guest_session), diagnostics.guest)
+            TextButton(onClick = vm::resetSession) { Text(tr(R.string.reset_guest_session)) }
             HorizontalDivider()
         }
         item {
-            SectionHeader("Signer")
-            SettingItem("Engine", diagnostics.native)
-            SettingItem("Bundle", diagnostics.bundle)
-            TextButton(onClick = vm::redownloadBundle) { Text("Re-download bundle") }
+            SectionHeader(tr(R.string.settings_signer_section))
+            SettingItem(tr(R.string.settings_engine), diagnostics.native)
+            SettingItem(tr(R.string.settings_bundle_label), diagnostics.bundle)
+            TextButton(onClick = vm::redownloadBundle) { Text(tr(R.string.redownload_bundle)) }
             HorizontalDivider()
         }
         item {
-            SectionHeader("Storage")
-            TextButton(onClick = vm::clearBundle) { Text("Clear cached signing bundle") }
-            TextButton(onClick = { navigate("speech") }) { Text("Manage offline speech model") }
+            SectionHeader(tr(R.string.settings_storage))
+            TextButton(onClick = vm::clearBundle) { Text(tr(R.string.clear_cached_bundle)) }
+            TextButton(onClick = { navigate("speech") }) {
+                Text(tr(R.string.manage_offline_speech))
+            }
             HorizontalDivider()
         }
         item {
-            SectionHeader("Developer")
-            SettingItem("Diagnostics", "Native version, connection, logs and export") {
+            SectionHeader(tr(R.string.settings_developer))
+            SettingItem(tr(R.string.diagnostics), tr(R.string.diagnostics_summary)) {
                 navigate("diagnostics")
             }
             HorizontalDivider()
         }
         item {
-            SectionHeader("About")
-            SettingItem("TikTools Studio", "1.2.0 · Android · Rust QuickJS core")
+            SectionHeader(tr(R.string.settings_about))
+            SettingItem(tr(R.string.about_product_name), tr(R.string.about_version))
             Spacer(Modifier.height(24.dp))
         }
     }

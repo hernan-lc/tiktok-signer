@@ -3,6 +3,7 @@ package dev.nglmercer.tiktools.tts
 import android.content.Context
 import android.speech.tts.TextToSpeech
 import dev.nglmercer.tiktools.core.model.LiveEvent
+import dev.nglmercer.tiktools.data.preferences.ChatNameMode
 import java.util.Locale
 
 /**
@@ -11,20 +12,76 @@ import java.util.Locale
  * nothing".
  */
 object SpeechText {
-    fun forEvent(event: LiveEvent, speakJoins: Boolean = false): String {
-        val who = event.nickname.ifEmpty { event.user }
+    fun forEvent(
+        event: LiveEvent,
+        speakJoins: Boolean = false,
+        includeChatName: Boolean = true,
+        chatPrefix: String = "",
+        phrases: SpeechPhrases = SpeechPhrases.ENGLISH,
+    ): String {
+        val who = event.nickname.ifEmpty { event.user }.ifEmpty { phrases.someone }
         return when (event.category) {
             LiveEvent.Category.CHAT ->
-                if (event.text.isBlank()) "" else "$who says: ${event.text.take(200)}"
-            LiveEvent.Category.GIFT -> "$who sent ${event.text.ifEmpty { "a gift" }}"
-            LiveEvent.Category.FOLLOW -> "$who followed"
-            LiveEvent.Category.SHARE -> "$who shared the live"
-            LiveEvent.Category.JOIN -> if (speakJoins && who.isNotEmpty()) "$who joined" else ""
+                if (event.text.isBlank()) ""
+                else if (!includeChatName) event.text.take(200)
+                else "$who ${chatPrefix.trim().ifEmpty { phrases.chatPrefix }}: ${event.text.take(200)}"
+            LiveEvent.Category.GIFT -> "$who ${phrases.sent} ${event.text.ifEmpty { phrases.gift }}"
+            LiveEvent.Category.FOLLOW -> "$who ${phrases.followed}"
+            LiveEvent.Category.SHARE -> "$who ${phrases.shared}"
+            LiveEvent.Category.JOIN -> if (speakJoins) "$who ${phrases.joined}" else ""
             LiveEvent.Category.LIKE,
             LiveEvent.Category.MEMBER,
             LiveEvent.Category.ROOM,
             LiveEvent.Category.UNKNOWN -> ""
         }
+    }
+}
+
+data class SpeechPhrases(
+    val chatPrefix: String,
+    val sent: String,
+    val gift: String,
+    val followed: String,
+    val shared: String,
+    val joined: String,
+    val someone: String,
+) {
+    companion object {
+        val ENGLISH =
+            SpeechPhrases("says", "sent", "a gift", "followed", "shared the live", "joined", "someone")
+    }
+}
+
+class ChatSpeakerTracker(private val repeatNameAfterMs: Long = 15_000) {
+    private var lastSpeaker: String? = null
+    private var lastSpokenAt: Long? = null
+
+    fun shouldAnnounce(userId: String, eventAt: Long, mode: ChatNameMode): Boolean {
+        val stableId = userId.trim().lowercase(Locale.ROOT)
+        val previousAt = lastSpokenAt
+        val shouldAnnounce =
+            when (mode) {
+                ChatNameMode.ALWAYS -> true
+                ChatNameMode.NEVER -> false
+                ChatNameMode.WHEN_CHANGED ->
+                    stableId.isBlank() ||
+                        stableId != lastSpeaker ||
+                        previousAt == null ||
+                        eventAt < previousAt ||
+                        eventAt - previousAt > repeatNameAfterMs
+            }
+        if (stableId.isNotBlank()) {
+            lastSpeaker = stableId
+            lastSpokenAt = eventAt
+        } else {
+            reset()
+        }
+        return shouldAnnounce
+    }
+
+    fun reset() {
+        lastSpeaker = null
+        lastSpokenAt = null
     }
 }
 
@@ -70,7 +127,7 @@ class AndroidSpeaker(context: Context) : Speaker {
         tts =
             TextToSpeech(context.applicationContext) { status ->
                 if (status == TextToSpeech.SUCCESS) {
-                    tts?.language = Locale.getDefault()
+                    tts?.language = context.resources.configuration.locales[0] ?: Locale.getDefault()
                 }
             }
     }

@@ -4,7 +4,7 @@ import dev.nglmercer.tiktools.app.AppContainer
 import dev.nglmercer.tiktools.data.rewards.PointsConfig
 import dev.nglmercer.tiktools.feature.StudioViewModel
 
-class RewardsViewModel(private val app: AppContainer) : StudioViewModel() {
+class RewardsViewModel(private val app: AppContainer) : StudioViewModel(app.context) {
     val leaderboard = app.points.leaderboard
     val config = app.points.config
 

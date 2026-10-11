@@ -46,7 +46,13 @@ class PreferencesMigrationTest {
             assertFalse(first.display.compact)
             assertFalse(first.display.showTime)
             repo.setEngine(TtsEngine.SUPERTONIC)
-            repo.setSpeech(first.speech.copy(chat = false))
+            repo.setSpeech(
+                first.speech.copy(
+                    chat = false,
+                    chatNameMode = ChatNameMode.WHEN_CHANGED,
+                    chatPrefix = "wrote",
+                )
+            )
             repo.rememberCreator("creator")
             repo.rememberCreator("another")
             repo.rememberCreator("creator")
@@ -54,6 +60,8 @@ class PreferencesMigrationTest {
             assertEquals(TtsEngine.SUPERTONIC, saved.engine)
             assertFalse(saved.speech.chat)
             assertTrue(saved.speech.joins)
+            assertEquals(ChatNameMode.WHEN_CHANGED, saved.speech.chatNameMode)
+            assertEquals("wrote", saved.speech.chatPrefix)
             assertEquals(listOf("creator", "another"), saved.recentCreators)
         } finally {
             scope.cancel()

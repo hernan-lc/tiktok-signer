@@ -11,12 +11,55 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import dev.nglmercer.tiktools.R
+import dev.nglmercer.tiktools.core.model.LiveEvent
+import dev.nglmercer.tiktools.live.LiveSessionState
 import dev.nglmercer.tiktools.live.*
 import dev.nglmercer.tiktools.ui.theme.LocalSemanticColors
 import java.util.Locale
+
+@Composable
+fun tr(id: Int, vararg formatArgs: Any): String = stringResource(id, *formatArgs)
+
+@Composable
+fun trPlural(id: Int, quantity: Int, vararg formatArgs: Any): String =
+    pluralStringResource(id, quantity, *formatArgs)
+
+@Composable
+private fun appLocale(): Locale =
+    LocalConfiguration.current.locales[0] ?: Locale.getDefault()
+
+@Composable
+fun localizedCompact(value: Long): String = compact(value, appLocale())
+
+@Composable
+fun localizedAmount(value: Double): String = amount(value, appLocale())
+
+@Composable
+fun localizedEventTime(at: Long): String = eventTime(at, appLocale())
+
+@Composable
+fun LiveEvent.Category.localizedName(): String =
+    tr(
+        when (this) {
+            LiveEvent.Category.CHAT -> R.string.category_chat
+            LiveEvent.Category.GIFT -> R.string.category_gift
+            LiveEvent.Category.LIKE -> R.string.category_like
+            LiveEvent.Category.FOLLOW -> R.string.category_follow
+            LiveEvent.Category.SHARE -> R.string.category_share
+            LiveEvent.Category.JOIN -> R.string.category_join
+            LiveEvent.Category.MEMBER -> R.string.category_member
+            LiveEvent.Category.ROOM -> R.string.category_room
+            LiveEvent.Category.UNKNOWN -> R.string.category_unknown
+        }
+    )
 
 @Composable
 fun SectionHeader(title: String, action: @Composable (() -> Unit)? = null) {
@@ -57,7 +100,9 @@ fun ErrorBanner(message: String?, onDismiss: (() -> Unit)? = null) {
         ) {
             Text(message, Modifier.weight(1f), color = MaterialTheme.colorScheme.onErrorContainer)
             if (onDismiss != null)
-                IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "Dismiss error") }
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Outlined.Close, stringResource(R.string.dismiss_error))
+                }
         }
     }
 }
@@ -88,6 +133,7 @@ fun CreatorAvatar(url: String, name: String, size: androidx.compose.ui.unit.Dp =
 @Composable
 fun LiveStatusBadge(state: LiveSessionState) {
     val semantic = LocalSemanticColors.current
+    val context = LocalContext.current
     val color =
         when (state) {
             is LiveSessionState.Connected -> semantic.live
@@ -101,7 +147,11 @@ fun LiveStatusBadge(state: LiveSessionState) {
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Box(Modifier.size(8.dp).clip(CircleShape).background(color))
-        Text(state.label(), color = color, style = MaterialTheme.typography.labelLarge)
+        Text(
+            state.localizedLabel(context),
+            color = color,
+            style = MaterialTheme.typography.labelLarge,
+        )
     }
 }
 
@@ -159,11 +209,12 @@ fun SettingSwitch(title: String, value: Boolean, onChange: (Boolean) -> Unit, de
     }
 }
 
-fun compact(value: Long): String =
+fun compact(value: Long, locale: Locale = Locale.getDefault()): String =
     when {
-        value >= 1_000_000 -> String.format(Locale.US, "%.1fM", value / 1_000_000.0)
-        value >= 1000 -> String.format(Locale.US, "%.1fk", value / 1000.0)
+        value >= 1_000_000 -> String.format(locale, "%.1fM", value / 1_000_000.0)
+        value >= 1000 -> String.format(locale, "%.1fk", value / 1000.0)
         else -> value.toString()
     }
 
-fun amount(value: Double): String = String.format(Locale.US, "%.1f", value)
+fun amount(value: Double, locale: Locale = Locale.getDefault()): String =
+    String.format(locale, "%.1f", value)

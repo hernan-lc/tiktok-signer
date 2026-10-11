@@ -7,6 +7,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import dev.nglmercer.tiktools.R
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -16,6 +17,7 @@ import dev.nglmercer.tiktools.feature.events.*
 import dev.nglmercer.tiktools.feature.home.*
 import dev.nglmercer.tiktools.feature.rewards.*
 import dev.nglmercer.tiktools.feature.settings.*
+import dev.nglmercer.tiktools.ui.components.tr
 
 class StudioViewModelFactory(private val container: AppContainer, private val context: Context) :
     ViewModelProvider.Factory {
@@ -103,10 +105,10 @@ fun TikToolsApp(container: AppContainer) {
                     .padding(16.dp)
                     .navigationBarsPadding()
             ) {
-                Text("Speech", style = MaterialTheme.typography.headlineMedium)
+                Text(tr(R.string.speech_title), style = MaterialTheme.typography.headlineMedium)
                 SpeechControls(prefs, vm::engine, vm::speech, vm::repeat, vm::skip, last != null)
                 Text(
-                    "Offline model download and engine details are in Settings → Speech",
+                    tr(R.string.speech_quick_details),
                     style = MaterialTheme.typography.bodySmall,
                 )
             }

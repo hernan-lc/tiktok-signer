@@ -39,7 +39,11 @@ manual adjustments use transactions. The exported Room schema is in `app/schemas
 
 DataStore migrates the existing points, speech, and event-display preferences.
 It also persists filters, recent creators, theme, speech categories, and
-connection policies. Event history is memory-only and limited to 300 rows;
+connection policies, including chat speaker naming and a custom chat prefix.
+The UI and spoken event phrases are available in English and Spanish. Android
+13+ users can change the app language from Settings → Appearance → App language;
+older Android versions follow the device language. Event history is memory-only
+and limited to 300 rows;
 pausing the reader does not pause rewards, actions, or speech.
 
 The source namespace is `dev.nglmercer.tiktools`. The installed application ID
@@ -51,6 +55,9 @@ remains `com.example.ttlsigner` to preserve upgrade data. `TtlNative` and
 Speech supports Off, Android device TTS, and offline Supertonic 3 (voice F1).
 Models download separately into `files/supertonic3/`; Speech shows download
 progress and provides cancel/delete, test, repeat, skip, and category controls.
+Chat speech can announce each name, only announce names when the speaker changes
+(with a repeat after 15 seconds of silence), or omit names. The chat prefix is
+editable; leaving it blank uses the selected app language’s default.
 The ONNX dependency includes native libraries and increases APK size.
 
 When background connection is enabled, `LiveService` maintains the foreground
@@ -62,7 +69,10 @@ can be disabled independently. Notification permission is requested on Android
 ## Build and verification
 
 Requirements: JDK 21, Android SDK platform 35, and Gradle (the checked-in wrapper
-uses 9.7.1). Native builds additionally require NDK 27, Rust Android targets,
+uses 9.7.1). The Android Gradle build rejects other JDK versions because the
+Robolectric test stack is verified with JDK 21. CI runs Android build, tests,
+lint, and instrumentation APK assembly on JDK 21. Native builds additionally
+require NDK 27, Rust Android targets,
 `cargo-ndk`, and libclang. Set `sdk.dir` in ignored `android/local.properties`.
 
 ```sh

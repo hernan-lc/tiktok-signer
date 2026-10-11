@@ -17,7 +17,15 @@ data class SpeechPreferences(
     val follows: Boolean = true,
     val shares: Boolean = true,
     val joins: Boolean = false,
+    val chatNameMode: ChatNameMode = ChatNameMode.ALWAYS,
+    val chatPrefix: String = "",
 )
+
+enum class ChatNameMode {
+    ALWAYS,
+    WHEN_CHANGED,
+    NEVER,
+}
 
 data class UserPreferences(
     val engine: TtsEngine = TtsEngine.OFF,

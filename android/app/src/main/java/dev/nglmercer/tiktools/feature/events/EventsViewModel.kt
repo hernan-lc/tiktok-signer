@@ -13,7 +13,7 @@ data class EventsUiState(
     val preferences: UserPreferences = UserPreferences(),
 )
 
-class EventsViewModel(private val app: AppContainer) : StudioViewModel() {
+class EventsViewModel(private val app: AppContainer) : StudioViewModel(app.context) {
     val state =
         combine(app.events.history, app.events.paused, app.preferences.state) { events, paused, p ->
                 EventsUiState(events.filter(p.filter::matches), paused, p)

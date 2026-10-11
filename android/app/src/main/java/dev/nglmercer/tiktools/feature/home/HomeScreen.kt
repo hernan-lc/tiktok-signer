@@ -10,6 +10,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
+import dev.nglmercer.tiktools.R
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -49,7 +50,7 @@ fun HomeScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            Text("TikTok LIVE Studio", style = MaterialTheme.typography.headlineLarge)
+            Text(tr(R.string.home_title), style = MaterialTheme.typography.headlineLarge)
             LiveStatusBadge(state.connection)
         }
         item {
@@ -74,7 +75,15 @@ fun HomeScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Text(
-                            "${compact(if(state.stats.viewers>0) state.stats.viewers else creator.viewers)} viewers",
+                            trPlural(
+                                R.plurals.event_viewers,
+                                (if (state.stats.viewers > 0) state.stats.viewers else creator.viewers)
+                                    .coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                                localizedCompact(
+                                    if (state.stats.viewers > 0) state.stats.viewers
+                                    else creator.viewers
+                                ),
+                            ),
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -87,8 +96,8 @@ fun HomeScreen(
                     username,
                     { username = it },
                     Modifier.fillMaxWidth(),
-                    label = { Text("TikTok username") },
-                    placeholder = { Text("@creator") },
+                    label = { Text(tr(R.string.tiktok_username)) },
+                    placeholder = { Text(tr(R.string.creator_placeholder)) },
                     singleLine = true,
                 )
                 Button(
@@ -100,7 +109,7 @@ fun HomeScreen(
                             .heightIn(min = 48.dp)
                             .testTag("connect-button"),
                 ) {
-                    Text("Connect")
+                    Text(tr(R.string.connect))
                 }
             } else
                 OutlinedButton(
@@ -108,8 +117,8 @@ fun HomeScreen(
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                 ) {
                     Text(
-                        if (state.connection is LiveSessionState.Connected) "Disconnect"
-                        else "Cancel connection"
+                        if (state.connection is LiveSessionState.Connected) tr(R.string.disconnect)
+                        else tr(R.string.cancel_connection)
                     )
                 }
         }
@@ -117,14 +126,14 @@ fun HomeScreen(
             item {
                 HorizontalDivider()
                 Row {
-                    StatItem(compact(state.stats.events), "Events", Modifier.weight(1f))
-                    StatItem(compact(state.stats.gifts), "Gifts", Modifier.weight(1f))
-                    StatItem(compact(state.stats.likes), "Likes", Modifier.weight(1f))
+                    StatItem(localizedCompact(state.stats.events), tr(R.string.stat_events), Modifier.weight(1f))
+                    StatItem(localizedCompact(state.stats.gifts), tr(R.string.stat_gifts), Modifier.weight(1f))
+                    StatItem(localizedCompact(state.stats.likes), tr(R.string.stat_likes), Modifier.weight(1f))
                 }
                 Row {
-                    StatItem(compact(state.stats.followers), "Followers", Modifier.weight(1f))
+                    StatItem(localizedCompact(state.stats.followers), tr(R.string.stat_followers), Modifier.weight(1f))
                     StatItem(
-                        amount(state.stats.points),
+                        localizedAmount(state.stats.points),
                         state.preferences.rewards.currencyName,
                         Modifier.weight(2f),
                     )
@@ -139,12 +148,12 @@ fun HomeScreen(
                         .clickable { onAction(HomeAction.Speech) }
                         .padding(vertical = 12.dp)
                 ) {
-                    Text("Speech", style = MaterialTheme.typography.titleMedium)
+                    Text(tr(R.string.speech_title), style = MaterialTheme.typography.titleMedium)
                     Text(
                         when (state.preferences.engine) {
-                            TtsEngine.OFF -> "Off"
-                            TtsEngine.DEVICE -> "Device voice"
-                            TtsEngine.SUPERTONIC -> "SuperTonic 3"
+                            TtsEngine.OFF -> tr(R.string.speech_off)
+                            TtsEngine.DEVICE -> tr(R.string.speech_device_voice)
+                            TtsEngine.SUPERTONIC -> tr(R.string.speech_engine_super)
                         },
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -153,41 +162,41 @@ fun HomeScreen(
                     Icon(
                         if (state.preferences.engine == TtsEngine.OFF) Icons.Outlined.VolumeOff
                         else Icons.Outlined.VolumeUp,
-                        "Toggle speech",
+                        tr(R.string.speech_toggle),
                     )
                 }
                 IconButton(onClick = { onAction(HomeAction.Speech) }) {
-                    Icon(Icons.Outlined.Tune, "Speech controls")
+                    Icon(Icons.Outlined.Tune, tr(R.string.speech_controls))
                 }
             }
         }
         if (state.recent.isNotEmpty()) {
-            item { SectionHeader("Recent activity") }
+            item { SectionHeader(tr(R.string.recent_activity)) }
             items(state.recent) { EventRow(it, state.preferences.display) }
         }
         if (!state.connection.isActive) {
             if (state.preferences.recentCreators.isNotEmpty()) {
-                item { SectionHeader("Recently watched") }
+                item { SectionHeader(tr(R.string.recently_watched)) }
                 items(state.preferences.recentCreators) { id ->
-                    SettingItem("@$id", "Connect to check current LIVE status") {
+                    SettingItem("@$id", tr(R.string.connect_check_live)) {
                         onAction(HomeAction.Connect(id))
                     }
                 }
             }
             item {
-                SectionHeader("Live now") {
+                SectionHeader(tr(R.string.live_now)) {
                     Row {
                         IconButton(
                             onClick = { onAction(HomeAction.Random) },
                             enabled = !state.feed.loading,
                         ) {
-                            Icon(Icons.Outlined.Shuffle, "Connect to a random creator")
+                            Icon(Icons.Outlined.Shuffle, tr(R.string.connect_random_creator))
                         }
                         IconButton(
                             onClick = { onAction(HomeAction.Refresh) },
                             enabled = !state.feed.loading,
                         ) {
-                            Icon(Icons.Outlined.Refresh, "Refresh live creators")
+                            Icon(Icons.Outlined.Refresh, tr(R.string.refresh_live_creators))
                         }
                     }
                 }
@@ -195,7 +204,7 @@ fun HomeScreen(
             if (state.feed.loading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
             if (state.feed.error != null) item { ErrorBanner(state.feed.error) }
             if (!state.feed.loading && state.feed.rooms.isEmpty())
-                item { EmptyState("No live creators to show", "Try refreshing the feed") }
+                item { EmptyState(tr(R.string.no_live_creators), tr(R.string.try_refresh_feed)) }
             items(state.feed.rooms, key = { it.uniqueId }) { room ->
                 Row(
                     Modifier.fillMaxWidth()
@@ -221,7 +230,11 @@ fun HomeScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Text(
-                            "${compact(room.viewers)} viewers",
+                            trPlural(
+                                R.plurals.event_viewers,
+                                room.viewers.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                                localizedCompact(room.viewers),
+                            ),
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }

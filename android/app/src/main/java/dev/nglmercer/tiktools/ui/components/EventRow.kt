@@ -8,11 +8,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.*
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import dev.nglmercer.tiktools.core.model.*
+import dev.nglmercer.tiktools.R
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -29,21 +32,34 @@ fun LiveEvent.Category.icon(): ImageVector =
         LiveEvent.Category.UNKNOWN -> Icons.Outlined.HelpOutline
     }
 
+@Composable
 fun LiveEvent.summary(): String =
     when (category) {
         LiveEvent.Category.CHAT -> text
         LiveEvent.Category.GIFT ->
-            "${text.ifEmpty { "Gift" }} ×$count · ${diamonds*count.coerceAtLeast(1)} diamonds"
-        LiveEvent.Category.LIKE -> "$count likes"
-        LiveEvent.Category.FOLLOW -> "Followed"
-        LiveEvent.Category.SHARE -> "Shared the LIVE"
-        LiveEvent.Category.JOIN -> "Joined"
-        LiveEvent.Category.MEMBER -> "Member action $count"
-        LiveEvent.Category.ROOM -> "${compact(count)} viewers"
-        LiveEvent.Category.UNKNOWN -> text.ifEmpty { "Unknown event" }
+            stringResource(
+                R.string.event_gift_summary,
+                text.ifEmpty { stringResource(R.string.gift_fallback) },
+                count,
+                diamonds * count.coerceAtLeast(1),
+            )
+        LiveEvent.Category.LIKE ->
+            pluralStringResource(R.plurals.event_likes, count.toInt(), count)
+        LiveEvent.Category.FOLLOW -> stringResource(R.string.event_followed)
+        LiveEvent.Category.SHARE -> stringResource(R.string.event_shared)
+        LiveEvent.Category.JOIN -> stringResource(R.string.event_joined)
+        LiveEvent.Category.MEMBER -> stringResource(R.string.event_member_summary, count)
+        LiveEvent.Category.ROOM ->
+            pluralStringResource(
+                R.plurals.event_viewers,
+                count.toInt(),
+                localizedCompact(count),
+            )
+        LiveEvent.Category.UNKNOWN -> text.ifEmpty { stringResource(R.string.event_unknown) }
     }
 
-fun eventTime(at: Long): String = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(at))
+fun eventTime(at: Long, locale: Locale = Locale.getDefault()): String =
+    SimpleDateFormat("HH:mm:ss", locale).format(Date(at))
 
 @Composable
 fun EventRow(
@@ -78,7 +94,9 @@ fun EventRow(
                         tint = MaterialTheme.colorScheme.primary,
                     )
                 Text(
-                    event.nickname.ifEmpty { event.user.ifEmpty { "Room" } },
+                    event.nickname.ifEmpty {
+                        event.user.ifEmpty { stringResource(R.string.category_room) }
+                    },
                     style = MaterialTheme.typography.labelLarge,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -96,7 +114,7 @@ fun EventRow(
             AsyncImage(event.giftImageUrl, null, Modifier.size(32.dp))
         if (display.showTime)
             Text(
-                eventTime(event.at),
+                localizedEventTime(event.at),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

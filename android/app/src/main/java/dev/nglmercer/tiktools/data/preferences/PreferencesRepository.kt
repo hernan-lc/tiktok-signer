@@ -43,6 +43,8 @@ class PreferencesRepository(
             it[booleanPreferencesKey("speech_follows")] = p.follows
             it[booleanPreferencesKey("speech_shares")] = p.shares
             it[booleanPreferencesKey("joins")] = p.joins
+            it[stringPreferencesKey("speech_chat_name_mode")] = p.chatNameMode.name
+            it[stringPreferencesKey("speech_chat_prefix")] = p.chatPrefix
         }
 
     suspend fun setRewards(p: PointsConfig) =
@@ -99,6 +101,10 @@ class PreferencesRepository(
                         bool("speech_follows", true),
                         bool("speech_shares", true),
                         bool("joins", false),
+                        p[stringPreferencesKey("speech_chat_name_mode")]
+                            ?.let { runCatching { ChatNameMode.valueOf(it) }.getOrNull() }
+                            ?: ChatNameMode.ALWAYS,
+                        p[stringPreferencesKey("speech_chat_prefix")].orEmpty(),
                     ),
                 rewards =
                     p[stringPreferencesKey("config")]?.let {

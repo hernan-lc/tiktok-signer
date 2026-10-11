@@ -1,6 +1,7 @@
 package dev.nglmercer.tiktools.tts
 
 import android.content.Context
+import dev.nglmercer.tiktools.R
 import dev.nglmercer.tiktools.core.diagnostics.Logger
 import dev.nglmercer.tiktools.core.model.LiveEvent
 import dev.nglmercer.tiktools.data.preferences.*
@@ -29,6 +30,7 @@ class TtsRepository(
     val lastSpoken = TtsController.lastSpoken
     private var speaker: Speaker = NoopSpeaker()
     private var engine = TtsEngine.OFF
+    private val chatSpeakerTracker = ChatSpeakerTracker()
     private var watcher: Job? = null
     private var download: Job? = null
     private val engineLock = kotlinx.coroutines.sync.Mutex()
@@ -69,15 +71,25 @@ class TtsRepository(
     }
 
     suspend fun setEngine(value: TtsEngine) {
+        if (preferences.state.value.engine != value) chatSpeakerTracker.reset()
         preferences.setEngine(value)
     }
 
     suspend fun setSpeech(value: SpeechPreferences) {
+        val previous = preferences.state.value.speech
+        if (previous.chat != value.chat || previous.chatNameMode != value.chatNameMode)
+            chatSpeakerTracker.reset()
         preferences.setSpeech(value)
     }
 
     fun onEvent(event: LiveEvent) {
-        val p = preferences.state.value.speech
+        val saved = preferences.state.value
+        val p = saved.speech
+        if (saved.engine == TtsEngine.OFF || !TtsController.enabled) {
+            chatSpeakerTracker.reset()
+            return
+        }
+        if (event.category != LiveEvent.Category.CHAT) chatSpeakerTracker.reset()
         val enabled =
             when (event.category) {
                 LiveEvent.Category.CHAT -> p.chat
@@ -87,7 +99,34 @@ class TtsRepository(
                 LiveEvent.Category.JOIN -> p.joins
                 else -> false
             }
-        if (enabled) TtsController.speak(SpeechText.forEvent(event, p.joins))
+        if (!enabled) return
+        val includeChatName =
+            if (event.category == LiveEvent.Category.CHAT)
+                chatSpeakerTracker.shouldAnnounce(event.user, event.at, p.chatNameMode)
+            else true
+        val phrases =
+            SpeechPhrases(
+                chatPrefix = context.getString(R.string.speech_chat_default_prefix),
+                sent = context.getString(R.string.speech_sent),
+                gift = context.getString(R.string.speech_gift_fallback),
+                followed = context.getString(R.string.speech_followed),
+                shared = context.getString(R.string.speech_shared),
+                joined = context.getString(R.string.speech_joined),
+                someone = context.getString(R.string.speech_someone),
+            )
+        TtsController.speak(
+            SpeechText.forEvent(
+                event,
+                speakJoins = p.joins,
+                includeChatName = includeChatName,
+                chatPrefix = p.chatPrefix,
+                phrases = phrases,
+            )
+        )
+    }
+
+    fun resetChatSpeaker() {
+        chatSpeakerTracker.reset()
     }
 
     fun repeat() {
@@ -99,7 +138,7 @@ class TtsRepository(
     }
 
     fun testVoice() {
-        TtsController.speak("TikTools Studio ready.")
+        TtsController.speak(context.getString(R.string.speech_test_line))
     }
 
     fun refreshModels() {
@@ -115,7 +154,11 @@ class TtsRepository(
                 _models.value.copy(
                     ready = ready,
                     bytes = bytes,
-                    detail = if (ready) "7 files · voice F1" else "Download the offline voice model",
+                    detail =
+                        context.getString(
+                            if (ready) R.string.speech_model_ready
+                            else R.string.speech_model_download_hint
+                        ),
                 )
         }
     }
@@ -134,10 +177,13 @@ class TtsRepository(
                             )
                     }
                 } catch (e: CancellationException) {
-                    _models.value = _models.value.copy(detail = "Download canceled")
+                    _models.value =
+                        _models.value.copy(detail = context.getString(R.string.speech_download_canceled))
                     throw e
                 } catch (e: Exception) {
-                    _models.value = _models.value.copy(error = e.message ?: "Download failed")
+                    _models.value = _models.value.copy(
+                        error = e.message ?: context.getString(R.string.speech_download_failed)
+                    )
                 } finally {
                     _models.value = _models.value.copy(downloading = false, progress = null)
                     refreshModels()
@@ -150,7 +196,7 @@ class TtsRepository(
     }
 
     suspend fun deleteModels() {
-        check(download?.isActive != true) { "Cancel the download before deleting the model" }
+        check(download?.isActive != true) { context.getString(R.string.speech_delete_error) }
         preferences.setEngine(TtsEngine.OFF)
         rebuild(TtsEngine.OFF)
         withContext(Dispatchers.IO) {
@@ -158,7 +204,7 @@ class TtsRepository(
                 !SupertonicModels.dir(context).exists() ||
                     SupertonicModels.dir(context).deleteRecursively()
             ) {
-                "Could not delete all model files"
+                context.getString(R.string.speech_delete_files_error)
             }
         }
         refreshModels()

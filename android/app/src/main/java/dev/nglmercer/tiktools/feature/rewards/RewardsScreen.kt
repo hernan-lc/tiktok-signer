@@ -11,6 +11,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.nglmercer.tiktools.R
+import dev.nglmercer.tiktools.core.model.LiveEvent
 import dev.nglmercer.tiktools.data.rewards.PointsConfig
 import dev.nglmercer.tiktools.ui.components.*
 
@@ -34,13 +36,13 @@ fun RewardsScreen(vm: RewardsViewModel) {
     }
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         item {
-            SectionHeader("Leaderboard") {
+            SectionHeader(tr(R.string.rewards_leaderboard)) {
                 Row {
                     IconButton(onClick = { rates = true }) {
-                        Icon(Icons.Outlined.Tune, "Reward rates")
+                        Icon(Icons.Outlined.Tune, tr(R.string.rewards_rates))
                     }
                     IconButton(onClick = { reset = true }) {
-                        Icon(Icons.Outlined.RestartAlt, "Reset all balances")
+                        Icon(Icons.Outlined.RestartAlt, tr(R.string.rewards_reset_all))
                     }
                 }
             }
@@ -49,8 +51,8 @@ fun RewardsScreen(vm: RewardsViewModel) {
         if (viewers.isEmpty())
             item {
                 EmptyState(
-                    "No rewards yet",
-                    "Viewer balances appear as LIVE events arrive",
+                    tr(R.string.rewards_empty),
+                    tr(R.string.rewards_empty_hint),
                     Icons.Outlined.EmojiEvents,
                 )
             }
@@ -71,13 +73,13 @@ fun RewardsScreen(vm: RewardsViewModel) {
                         style = MaterialTheme.typography.titleMedium,
                     )
                     Text(
-                        "Level ${user.level} · @${user.uniqueId}",
+                        tr(R.string.rewards_level, user.level, user.uniqueId),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 Text(
-                    "${amount(user.points)} ${config.currencyName}",
+                    "${localizedAmount(user.points)} ${config.currencyName}",
                     style = MaterialTheme.typography.labelLarge,
                 )
             }
@@ -104,20 +106,23 @@ fun RewardsScreen(vm: RewardsViewModel) {
                     style = MaterialTheme.typography.headlineMedium,
                 )
                 Text(
-                    "${amount(viewer?.points ?: 0.0)} ${config.currencyName} · Level ${viewer?.level ?: 1}"
+                    "${localizedAmount(viewer?.points ?: 0.0)} ${config.currencyName} · ${tr(R.string.rewards_level, viewer?.level ?: 1, id)}"
                 )
-                SectionHeader("Earned from")
-                for (earning in earnings) SettingItem(
-                    earning.category.lowercase().replaceFirstChar(Char::uppercase),
-                    amount(earning.amount),
-                )
+                SectionHeader(tr(R.string.rewards_earned_from))
+                for (earning in earnings) {
+                    val category =
+                        runCatching { LiveEvent.Category.valueOf(earning.category.uppercase()) }
+                            .getOrNull()
+                    SettingItem(category?.localizedName() ?: earning.category, localizedAmount(earning.amount))
+                }
                 val untracked = (viewer?.points ?: 0.0) - earnings.sumOf { it.amount }
-                if (untracked > 0.001) SettingItem("Previous balance", amount(untracked))
+                if (untracked > 0.001)
+                    SettingItem(tr(R.string.rewards_previous_balance), localizedAmount(untracked))
                 ErrorBanner(error, vm::dismissError)
                 OutlinedTextField(
                     delta,
                     { delta = it },
-                    label = { Text("Adjustment (negative to subtract)") },
+                    label = { Text(tr(R.string.rewards_adjustment_hint)) },
                     keyboardOptions =
                         androidx.compose.foundation.text.KeyboardOptions(
                             keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal
@@ -131,7 +136,7 @@ fun RewardsScreen(vm: RewardsViewModel) {
                     },
                     enabled = delta.toDoubleOrNull()?.isFinite() == true,
                 ) {
-                    Text("Adjust points")
+                    Text(tr(R.string.rewards_adjust_points))
                 }
             }
         }
@@ -139,9 +144,9 @@ fun RewardsScreen(vm: RewardsViewModel) {
     if (reset)
         AlertDialog(
             onDismissRequest = { reset = false },
-            title = { Text("Reset all balances?") },
+            title = { Text(tr(R.string.rewards_reset_title)) },
             text = {
-                Text("Viewers stay in the leaderboard with zero points. This cannot be undone.")
+                Text(tr(R.string.rewards_reset_message))
             },
             confirmButton = {
                 TextButton(
@@ -150,10 +155,12 @@ fun RewardsScreen(vm: RewardsViewModel) {
                         reset = false
                     }
                 ) {
-                    Text("Reset")
+                    Text(tr(R.string.rewards_reset))
                 }
             },
-            dismissButton = { TextButton(onClick = { reset = false }) { Text("Cancel") } },
+            dismissButton = {
+                TextButton(onClick = { reset = false }) { Text(tr(R.string.cancel)) }
+            },
         )
 }
 
@@ -178,7 +185,19 @@ private fun RewardRates(
     var shareOn by rememberSaveable { mutableStateOf(config.pointsPerShareEnabled) }
     var join by rememberSaveable { mutableStateOf(config.pointsPerJoin.toString()) }
     var joinOn by rememberSaveable { mutableStateOf(config.pointsPerJoinEnabled) }
-    var expanded by rememberSaveable { mutableStateOf("Chat") }
+    var expanded by rememberSaveable { mutableStateOf("") }
+    val chatTitle = tr(R.string.category_chat)
+    val giftTitle = tr(R.string.category_gift)
+    val likeTitle = tr(R.string.category_like)
+    val followTitle = tr(R.string.category_follow)
+    val shareTitle = tr(R.string.category_share)
+    val joinTitle = tr(R.string.category_join)
+    val perChat = tr(R.string.rewards_per_chat)
+    val perGift = tr(R.string.rewards_per_gift)
+    val perLike = tr(R.string.rewards_per_like)
+    val perFollow = tr(R.string.rewards_per_follow)
+    val perShare = tr(R.string.rewards_per_share)
+    val perJoin = tr(R.string.rewards_per_join)
     val valid =
         listOf(chat, gift, like, follow, share, join).all {
             it.toDoubleOrNull()?.let { n ->
@@ -193,22 +212,22 @@ private fun RewardRates(
         item {
             TextButton(onClick = onBack) {
                 Icon(Icons.Outlined.ArrowBack, null)
-                Text("Leaderboard")
+                Text(tr(R.string.rewards_leaderboard))
             }
-            Text("Reward rates", style = MaterialTheme.typography.headlineMedium)
+            Text(tr(R.string.rewards_rates), style = MaterialTheme.typography.headlineMedium)
             ErrorBanner(error)
         }
         item {
             OutlinedTextField(
                 currency,
                 { currency = it },
-                label = { Text("Currency name") },
+                label = { Text(tr(R.string.rewards_currency_name)) },
                 singleLine = true,
             )
             OutlinedTextField(
                 level,
                 { level = it },
-                label = { Text("Points per level (minimum 10)") },
+                label = { Text(tr(R.string.rewards_points_per_level)) },
                 singleLine = true,
             )
         }
@@ -223,10 +242,15 @@ private fun RewardRates(
             item {
                 SectionHeader(title) {
                     TextButton(onClick = { expanded = if (expanded == title) "" else title }) {
-                        Text(if (expanded == title) "Close" else "Edit")
+                        Text(
+                            tr(
+                                if (expanded == title) R.string.rewards_close
+                                else R.string.rewards_edit
+                            )
+                        )
                     }
                 }
-                SettingSwitch("Enabled", enabled, onEnabled)
+                SettingSwitch(tr(R.string.rewards_enabled), enabled, onEnabled)
                 if (expanded == title)
                     OutlinedTextField(
                         value,
@@ -247,12 +271,12 @@ private fun RewardRates(
                 HorizontalDivider(Modifier.padding(top = 8.dp))
             }
         }
-        rate("Chat", chat, { chat = it }, chatOn, { chatOn = it }, "Per message")
-        rate("Gift", gift, { gift = it }, giftOn, { giftOn = it }, "Per diamond")
-        rate("Like", like, { like = it }, likeOn, { likeOn = it }, "Per like")
-        rate("Follow", follow, { follow = it }, followOn, { followOn = it }, "Per follow")
-        rate("Share", share, { share = it }, shareOn, { shareOn = it }, "Per share")
-        rate("Join", join, { join = it }, joinOn, { joinOn = it }, "Per join")
+        rate(chatTitle, chat, { chat = it }, chatOn, { chatOn = it }, perChat)
+        rate(giftTitle, gift, { gift = it }, giftOn, { giftOn = it }, perGift)
+        rate(likeTitle, like, { like = it }, likeOn, { likeOn = it }, perLike)
+        rate(followTitle, follow, { follow = it }, followOn, { followOn = it }, perFollow)
+        rate(shareTitle, share, { share = it }, shareOn, { shareOn = it }, perShare)
+        rate(joinTitle, join, { join = it }, joinOn, { joinOn = it }, perJoin)
         item {
             Button(
                 onClick = {
@@ -278,7 +302,7 @@ private fun RewardRates(
                 enabled = valid && currency.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Save rates")
+                Text(tr(R.string.rewards_save_rates))
             }
         }
     }
