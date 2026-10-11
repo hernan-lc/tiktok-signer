@@ -12,9 +12,11 @@
         android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
         android:label="@string/app_name"
-        android:theme="@style/Theme.TtlSigner">
+        android:localeConfig="@xml/locales_config"
+        android:theme="@style/Theme.TikTools"
+        android:name="dev.nglmercer.tiktools.app.TikToolsApplication">
         <activity
-            android:name=".MainActivity"
+            android:name="dev.nglmercer.tiktools.app.MainActivity"
             android:exported="true"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
@@ -23,7 +25,7 @@
             </intent-filter>
         </activity>
         <service
-            android:name=".LiveService"
+            android:name="dev.nglmercer.tiktools.live.LiveService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
     </application>
