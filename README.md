@@ -25,6 +25,13 @@ decoding, schema discovery, cloning, JSON, and an in-process live client.
 cargo build --release -p ttl-live-native
 ```
 
+Run the C example with a single command from the repository root; the helper fetches and verifies
+the pinned signing bundle automatically:
+
+```sh
+./crates/ttl-live-native/examples/live @creator
+```
+
 Include `<ttl/ttl.h>` from `crates/ttl-live-native/include` and link `ttl_live`.
 See the native documentation for ownership, callback threading, defensive limits,
 C examples, and cross-platform artifacts. Mobile and native frontends share the

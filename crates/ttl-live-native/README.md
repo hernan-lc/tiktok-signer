@@ -9,21 +9,36 @@ Chat, gift, like, member, social, and room-user events additionally retain their
 stable normalized model. Known schema-only and future unknown methods reach the
 same event callback with metadata, ordered fields, and retained raw bytes.
 
-## Build and link
+## Run the example
+
+From the repository root, run:
+
+```sh
+./crates/ttl-live-native/examples/live @creator
+```
+
+The helper builds the native library and C example, downloads the pinned signing bundle on first
+run, verifies its SHA-256, and starts an anonymous guest connection. It requires Rust, a C compiler,
+`curl`, and network access. It prints readable chat and gift lines, labels other normalized events,
+and summarizes schema-only events without dumping JSON. Press Enter to disconnect. No bundle path
+or cookie argument is needed.
+
+## Manual build and link
 
 ```sh
 cargo build --release -p ttl-live-native
 cc -std=c11 -Icrates/ttl-live-native/include \
   crates/ttl-live-native/examples/live.c -Ltarget/release -lttl_live \
-  -Wl,-rpath,"$PWD/target/release" -o live
-./live @creator /path/to/trusted-bundle.js 'sessionid=...; ttwid=...'
+  -Wl,-rpath,"$PWD/target/release" -o target/release/ttl-live-example
+./target/release/ttl-live-example @creator /path/to/trusted-bundle.js 'sessionid=...; ttwid=...'
 ```
 
-The application supplies **trusted explicit JavaScript source**, not a URL. No
-bundle is vendored or downloaded by this library. Optional explicit cookies are
-copied into the signing profile and transport. With no explicit cookies, the
-existing guest bootstrap helper acquires an anonymous identity; TikTok may require an account
-session to open its message socket. Discovery resolves the creator's unique ID.
+The library accepts **trusted explicit JavaScript source**, not a URL; it does not download or
+vendor a bundle. The repository-level `./live` helper downloads the pinned public bundle and passes
+its source to the C example. Optional explicit cookies are copied into the signing profile and
+transport. With no explicit cookies, the existing guest bootstrap helper acquires an anonymous
+identity; TikTok may require an account session to open its message socket. Discovery resolves the
+creator's unique ID.
 Diagnostics use fixed redacted messages; the library installs no logging sink.
 An application's tracing configuration remains responsible for its own logs.
 

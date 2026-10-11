@@ -1,0 +1,53 @@
+#!/bin/sh
+set -eu
+
+if [ "$#" -ne 1 ] || [ -z "$1" ]; then
+    printf 'usage: %s @creator\n' "$0" >&2
+    exit 2
+fi
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+root_dir=$(CDPATH= cd -- "$script_dir/../../.." && pwd)
+bundle_path="$root_dir/webmssdk.js"
+bundle_url='https://sf16-website-login.neutral.ttwstatic.com/obj/tiktok_web_login_static/webmssdk/1.0.0.388/webmssdk.js'
+expected_hash='dee22566273d398e074df6db40f39cfd827f6b8efd6fc382de03c44c501299ac'
+
+hash_file() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    else
+        printf 'error: sha256sum or shasum is required\n' >&2
+        return 1
+    fi
+}
+
+if [ ! -f "$bundle_path" ]; then
+    download_tmp=$(mktemp "${TMPDIR:-/tmp}/ttl-live-webmssdk.XXXXXX")
+    trap 'rm -f "$download_tmp"' 0 HUP INT TERM
+    curl --fail --location --silent --show-error --max-time 60 \
+        --output "$download_tmp" "$bundle_url"
+    actual_hash=$(hash_file "$download_tmp")
+    if [ "$actual_hash" != "$expected_hash" ]; then
+        printf 'error: downloaded signing bundle hash did not match the pinned bundle\n' >&2
+        exit 1
+    fi
+    mv "$download_tmp" "$bundle_path"
+    trap - 0 HUP INT TERM
+fi
+
+actual_hash=$(hash_file "$bundle_path")
+if [ "$actual_hash" != "$expected_hash" ]; then
+    printf 'error: %s is not the pinned signing bundle; remove it and rerun\n' "$bundle_path" >&2
+    exit 1
+fi
+
+cargo build --locked --release --manifest-path "$root_dir/Cargo.toml" -p ttl-live-native
+cc -std=c11 -I"$root_dir/crates/ttl-live-native/include" \
+    "$script_dir/live.c" \
+    -L"$root_dir/target/release" -lttl_live \
+    -Wl,-rpath,"$root_dir/target/release" \
+    -o "$root_dir/target/release/ttl-live-example"
+
+exec "$root_dir/target/release/ttl-live-example" "$1" "$bundle_path"
