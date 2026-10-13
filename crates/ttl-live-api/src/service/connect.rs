@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use serde::Serialize;
-use tokio::sync::{Mutex, OnceCell, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{OnceCell, OwnedSemaphorePermit, Semaphore};
 use tracing::{debug, info, warn};
 
 use crate::cache::RoomCache;
@@ -19,6 +19,26 @@ use super::signer::ConnectionSigner;
 const MAX_UNIQUE_ID_LENGTH: usize = 24;
 
 type ResolutionFlight = Arc<OnceCell<Result<RoomResolution, ResolveFailure>>>;
+
+/// A lease is dropped even when a get_or_init future is cancelled. Only the last
+/// caller removes the matching map entry; siblings can still initialize/read it.
+struct FlightLease<'a> {
+    flights: &'a Mutex<HashMap<String, ResolutionFlight>>,
+    key: &'a str,
+    flight: ResolutionFlight,
+}
+impl Drop for FlightLease<'_> {
+    fn drop(&mut self) {
+        let mut flights = self.flights.lock().unwrap_or_else(|e| e.into_inner());
+        if flights
+            .get(self.key)
+            .is_some_and(|current| Arc::ptr_eq(current, &self.flight))
+            && Arc::strong_count(&self.flight) == 2
+        {
+            flights.remove(self.key);
+        }
+    }
+}
 
 /// The only public identifier accepted by the broker. The canonical form is lower-level TikTok's
 /// username without a leading `@`; room ids never enter this request type.
@@ -323,24 +343,29 @@ impl ConnectService {
             .discovery_cache_misses_total
             .fetch_add(1, Ordering::Relaxed);
 
-        let flight = {
-            let mut flights = self.flights.lock().await;
-            flights
-                .entry(unique_id.to_owned())
-                .or_insert_with(|| Arc::new(OnceCell::new()))
-                .clone()
+        let lease = FlightLease {
+            flights: &self.flights,
+            key: unique_id,
+            flight: {
+                let mut flights = self.flights.lock().unwrap_or_else(|e| e.into_inner());
+                if !flights.contains_key(unique_id)
+                    && flights.len() >= self.config.max_concurrent_requests
+                {
+                    return Err(ResolveFailure::Capacity.into());
+                }
+                flights
+                    .entry(unique_id.to_owned())
+                    .or_insert_with(|| Arc::new(OnceCell::new()))
+                    .clone()
+            },
         };
-        // Known benign race, documented deliberately: the cache check above and this join
-        // are not atomic with another flight's completion, so a request that missed just
-        // before a sibling populated the cache can start a second discovery for the same
-        // creator. Both flights resolve the same value and the cache absorbs it, so this
-        // is one redundant upstream request in unusual scheduling — an optimization
-        // footnote, not a correctness issue. Closing it would need a post-join cache
-        // re-check plus cleanup of the unused cell, which is more concurrency machinery
-        // than a rare duplicate lookup justifies.
-
-        let result = flight
+        let result = lease
+            .flight
             .get_or_init(|| async {
+                // Another flight may have filled the cache after our initial miss.
+                if let Some(value) = self.cache.get(unique_id).await {
+                    return Ok(value);
+                }
                 let _slot = self
                     .discovery_slots
                     .clone()
@@ -369,18 +394,6 @@ impl ConnectService {
             })
             .await
             .clone();
-
-        // Completed flights are removed, but callers already holding the Arc can finish reading
-        // their shared result. The pointer check prevents a late cleanup from deleting a newer
-        // flight for the same creator.
-        let mut flights = self.flights.lock().await;
-        if flights
-            .get(unique_id)
-            .is_some_and(|current| Arc::ptr_eq(current, &flight))
-        {
-            flights.remove(unique_id);
-        }
-        drop(flights);
 
         match result {
             Ok(RoomResolution::NotFound) => Err(ApiError::UserNotFound),
@@ -486,6 +499,39 @@ mod tests {
             self.calls.fetch_add(1, Ordering::Relaxed);
             let result = self.result.clone();
             Box::pin(async move { Ok(result) })
+        }
+    }
+
+    struct GatedResolver {
+        entered: tokio::sync::Notify,
+    }
+    impl RoomResolver for GatedResolver {
+        fn resolve(&self, _: String) -> ServiceFuture<'_, Result<RoomResolution, ResolveFailure>> {
+            Box::pin(async move {
+                self.entered.notify_one();
+                std::future::pending().await
+            })
+        }
+    }
+    #[tokio::test]
+    async fn cancelled_discovery_removes_flights_and_releases_permits() {
+        let resolver = Arc::new(GatedResolver {
+            entered: tokio::sync::Notify::new(),
+        });
+        let service =
+            ConnectService::new(resolver.clone(), Arc::new(MockSigner), AppConfig::default());
+        for index in 0..20 {
+            let cloned = service.clone();
+            let task =
+                tokio::spawn(async move { cloned.resolve(&format!("creator{index}"), 1).await });
+            resolver.entered.notified().await;
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+            assert!(service.flights.lock().unwrap().is_empty());
+            assert_eq!(
+                service.discovery_slots.available_permits(),
+                service.config.max_concurrent_discovery
+            );
         }
     }
 
