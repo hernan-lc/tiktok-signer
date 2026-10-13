@@ -357,3 +357,83 @@ test('an authenticated handshake refusal stops reconnecting with the same sessio
   assert.equal(socketCount, 2);
   live.disconnect();
 });
+
+class LifecycleSocket {
+  static instances: LifecycleSocket[] = [];
+  static autoOpen = true;
+  binaryType = '';
+  readonly listeners = new Map<string, Function[]>();
+  constructor() {
+    LifecycleSocket.instances.push(this);
+    if (LifecycleSocket.autoOpen) queueMicrotask(() => this.dispatch('open'));
+  }
+  addEventListener(type: string, listener: Function): void {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+  }
+  send(): void {}
+  close(): void { this.dispatch('close', { code: 1000, reason: 'done' }); }
+  dispatch(type: string, value?: unknown): void {
+    for (const fn of this.listeners.get(type) ?? []) fn(value);
+  }
+}
+function lifecycleClient(): TikTokLive {
+  return new TikTokLive('someone', {
+    roomId: '7300', sessionCookie: 'sessionid=test', fetchGifts: false, fetchRoomInfo: false,
+    signer: { sign: (url) => url },
+    WebSocketImpl: LifecycleSocket as unknown as WebSocketConstructor,
+    reconnect: { initialMs: 5, maxMs: 5, attempts: 2 },
+  });
+}
+
+test('stale sockets cannot close a new connection or emit unhandled errors', async () => {
+  LifecycleSocket.instances = [];
+  const live = lifecycleClient();
+  await live.connect();
+  const old = LifecycleSocket.instances[0]!;
+  live.disconnect();
+  await live.connect();
+  const current = LifecycleSocket.instances[1]!;
+  old.dispatch('close', { code: 1006 });
+  old.dispatch('error', { message: 'stale' });
+  assert.equal(live.connected, true);
+  assert.doesNotThrow(() => current.dispatch('error', { message: 'current' }));
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  assert.equal(LifecycleSocket.instances.length, 2);
+  live.disconnect();
+});
+
+test('disconnect invalidates pending open and allows a new manual connection', async () => {
+  LifecycleSocket.instances = [];
+  LifecycleSocket.autoOpen = false;
+  const live = lifecycleClient();
+  try {
+    const pending = live.connect();
+    const rejected = assert.rejects(pending, /cancelled/);
+    for (let i = 0; i < 10 && LifecycleSocket.instances.length === 0; i++) await Promise.resolve();
+    const old = LifecycleSocket.instances[0]!;
+    assert.ok(old);
+    live.disconnect();
+    await rejected;
+    LifecycleSocket.autoOpen = true;
+    await live.connect();
+    old.dispatch('open');
+    old.dispatch('close', { code: 1006 });
+    assert.equal(live.connected, true);
+    assert.equal(LifecycleSocket.instances.length, 2);
+  } finally {
+    LifecycleSocket.autoOpen = true;
+    live.disconnect();
+  }
+});
+
+test('duplicate close notifications schedule one reconnect and disconnect clears it', async () => {
+  LifecycleSocket.instances = [];
+  const live = lifecycleClient();
+  await live.connect();
+  const old = LifecycleSocket.instances[0]!;
+  old.dispatch('close', { code: 1006 });
+  old.dispatch('close', { code: 1006 });
+  live.disconnect();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(LifecycleSocket.instances.length, 1);
+});

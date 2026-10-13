@@ -211,3 +211,71 @@ test('offline is a successful SDK state and emits offline', async () => {  let o
   assert.equal(state.connected, false);
   assert.equal(offline, 1);
 });
+
+test('old close and error callbacks cannot reset a new connection', async () => {
+  FakeWebSocket.instances = [];
+  const live = new TikTokLive('creator', { fetchImpl: async () => liveResponse(), WebSocketImpl });
+  await live.connect();
+  const old = FakeWebSocket.instances[0]!;
+  live.disconnect();
+  await live.connect();
+  old.dispatch('close', { code: 1006 });
+  old.dispatch('error', { message: 'stale' });
+  assert.equal(live.connected, true);
+  assert.equal(FakeWebSocket.instances.length, 2);
+  live.disconnect();
+});
+
+test('disconnect during API discovery invalidates the result even after a new connect', async () => {
+  FakeWebSocket.instances = [];
+  let resolveOld!: (value: Response) => void;
+  let calls = 0;
+  const live = new TikTokLive('creator', {
+    fetchImpl: async () => ++calls === 1 ? await new Promise<Response>((resolve) => { resolveOld = resolve; }) : liveResponse(),
+    WebSocketImpl,
+  });
+  const old = live.connect();
+  const rejected = assert.rejects(old, /cancelled/);
+  live.disconnect();
+  await live.connect();
+  resolveOld(liveResponse());
+  await rejected;
+  assert.equal(FakeWebSocket.instances.length, 1);
+  assert.equal(live.connected, true);
+  live.disconnect();
+});
+
+test('disconnect settles a pending handshake and stale open cannot revive it', async () => {
+  HeldWebSocket.instances = [];
+  const live = new TikTokLive('creator', {
+    fetchImpl: async () => liveResponse(), WebSocketImpl: HeldWebSocketImpl,
+  });
+  const pending = live.connect();
+  const rejected = assert.rejects(pending, /cancelled/);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  live.disconnect();
+  await rejected;
+  HeldWebSocket.instances[0]!.open();
+  assert.equal(live.connected, false);
+});
+
+test('listener failures preserve subsequent event delivery and ACK progress', async () => {
+  FakeWebSocket.instances = [];
+  const live = new TikTokLive('creator', { fetchImpl: async () => liveResponse(), WebSocketImpl });
+  await live.connect();
+  let calls = 0;
+  live.on('event', () => { if (++calls === 1) throw new Error('listener failure'); });
+  const batch = toBinary(ProtoMessageFetchResultSchema, create(ProtoMessageFetchResultSchema, {
+    messages: [1n, 2n].map((msgId) => create(BaseProtoMessageSchema, { method: 'Future', msgId })),
+    needAck: true, internalExt: 'test',
+  }));
+  const frame = toBinary(WebcastPushFrameSchema, create(WebcastPushFrameSchema, {
+    logId: 2n, payloadType: 'msg', payload: batch,
+  }));
+  const socket = FakeWebSocket.instances[0]!;
+  assert.doesNotThrow(() => socket.receive(frame.buffer.slice(frame.byteOffset, frame.byteOffset + frame.byteLength)));
+  assert.equal(calls, 2);
+  assert.equal(decodePushFrame(socket.sent[1]!).payloadType, 'ack');
+  assert.equal(live.connected, true);
+  live.disconnect();
+});

@@ -95,6 +95,8 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   #reconnectTimer: NodeJS.Timeout | null = null;
   #connecting: Promise<LiveState> | null = null;
   #closing = false;
+  #generation = 0;
+  #cancelOpen: (() => void) | null = null;
   #attempt = 0;
   #gifts = new Map<string, Gift>();
 
@@ -132,7 +134,11 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     if (this.connected) return Promise.resolve(this.state());
     if (this.#connecting) return this.#connecting;
     this.#closing = false;
-    const connecting = this.#connectFromApi();
+    this.#closing = false;
+    if (this.#reconnectTimer) clearTimeout(this.#reconnectTimer);
+    this.#reconnectTimer = null;
+    const generation = ++this.#generation;
+    const connecting = this.#connectFromApi(generation);
     this.#connecting = connecting;
     void connecting.finally(() => {
       if (this.#connecting === connecting) this.#connecting = null;
@@ -151,6 +157,10 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
 
   disconnect(): void {
     this.#closing = true;
+    this.#generation += 1;
+    this.#connecting = null;
+    this.#cancelOpen?.();
+    this.#cancelOpen = null;
     this.#socketOpen = false;
     if (this.#reconnectTimer) clearTimeout(this.#reconnectTimer);
     this.#reconnectTimer = null;
@@ -166,9 +176,9 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     }
   }
 
-  async #connectFromApi(): Promise<LiveState> {
+  async #connectFromApi(generation: number): Promise<LiveState> {
     const descriptor = await this.api.connect(this.uniqueId);
-    if (this.#closing) throw new SocketError('connection cancelled');
+    this.#checkGeneration(generation);
 
     this.#roomId = descriptor.roomId ?? null;
     this.#status = descriptor.status;
@@ -181,26 +191,31 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
       throw new ProtocolError('live response did not include connection metadata');
     }
 
-    if (this.#options.fetchGifts) await this.#loadGifts(descriptor.connection, descriptor.roomId);
-    await this.#open(descriptor.connection, descriptor.roomId);
+    if (this.#options.fetchGifts) await this.#loadGifts(descriptor.connection, descriptor.roomId, generation);
+    this.#checkGeneration(generation);
+    await this.#open(descriptor.connection, descriptor.roomId, generation);
     return this.state();
   }
 
-  async #loadGifts(descriptor: ConnectionDescriptor, roomId: string): Promise<void> {
+  async #loadGifts(descriptor: ConnectionDescriptor, roomId: string, generation: number): Promise<void> {
     try {
       const discovery = new Discovery({
         cookie: descriptor.cookies,
         userAgent: descriptor.userAgent,
         timeoutMs: this.api.timeoutMs,
       });
-      this.#gifts = await discovery.giftList(roomId);
+      const gifts = await discovery.giftList(roomId);
+      this.#checkGeneration(generation);
+      this.#gifts = gifts;
     } catch (error) {
+      this.#checkGeneration(generation);
       this.#emitError(error);
       this.#gifts = new Map<string, Gift>();
     }
   }
 
-  async #open(descriptor: ConnectionDescriptor, roomId: string): Promise<void> {
+  async #open(descriptor: ConnectionDescriptor, roomId: string, generation: number): Promise<void> {
+    this.#checkGeneration(generation);
     const implementation = this.#options.WebSocketImpl
       ?? (WebSocket as unknown as WebSocketConstructor);
 
@@ -221,9 +236,17 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
       }, OPEN_TIMEOUT_MS);
       timer.unref?.();
 
+      this.#cancelOpen = () => {
+        clearTimeout(timer);
+        if (!settled) {
+          settled = true;
+          reject(new SocketError('connection cancelled'));
+        }
+      };
+
       socket.addEventListener('open', () => {
         if (settled) return;
-        if (this.#closing) {
+        if (this.#closing || generation !== this.#generation || this.#socket !== socket) {
           settled = true;
           clearTimeout(timer);
           socket.close();
@@ -251,19 +274,24 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
         clearTimeout(timer);
         settled = true;
         resolve();
+        this.#cancelOpen = null;
         this.emit('connected', this.state());
       });
 
       socket.addEventListener('message', (message) => {
-        if (this.#socket === socket) this.#receive(socket, message.data);
+        if (!this.#closing && this.#socket === socket && generation === this.#generation) this.#receive(socket, message.data);
       });
 
       socket.addEventListener('error', (event) => {
+        if (this.#socket !== socket || generation !== this.#generation) return;
         const error = new SocketError(event.message ?? 'TikTok WebSocket error');
         if (settled) this.#emitError(error);
       });
 
       socket.addEventListener('close', (event) => {
+        clearTimeout(timer);
+        if (this.#socket !== socket) return;
+        this.#cancelOpen = null;
         if (this.#socket === socket) this.#socket = null;
         this.#socketOpen = false;
         this.#stopHeartbeat();
@@ -286,6 +314,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   }
 
   #receive(socket: WebSocketLike, data: ArrayBuffer | ArrayBufferView): void {
+    const generation = this.#generation;
     let frame;
     try {
       frame = decodePushFrame(data);
@@ -323,8 +352,11 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
         msgId: message.msgId.toString(),
         isHistory: message.isHistory,
       });
-      this.emit('event', event);
-      this.#emitTypedEvent(event);
+      if (this.#closing || generation !== this.#generation) break;
+      try {
+        this.emit('event', event);
+        if (!this.#closing && generation === this.#generation) this.#emitTypedEvent(event);
+      } catch (error) { this.#emitError(error); }
     }
   }
 
@@ -354,7 +386,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   }
 
   #scheduleReconnect(minDelayMs = 0): void {
-    if (this.#closing) return;
+    if (this.#closing || this.#reconnectTimer) return;
     const policy = this.#options.reconnect;
     if (this.#attempt >= Math.max(0, Math.floor(policy.attempts))) {
       this.#emitError(new LiveApiError(
@@ -366,8 +398,10 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     this.#attempt += 1;
     const delayMs = Math.max(reconnectDelay(policy, this.#attempt), Math.max(0, minDelayMs));
     this.emit('reconnecting', { attempt: this.#attempt, delayMs });
+    const generation = this.#generation;
     const timer = setTimeout(() => {
-      if (this.#closing) return;
+      this.#reconnectTimer = null;
+      if (this.#closing || generation !== this.#generation) return;
       this.#reconnectTimer = null;
       void this.#reconnect();
     }, delayMs);
@@ -376,10 +410,14 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   }
 
   async #reconnect(): Promise<void> {
+    let generation = this.#generation;
     try {
-      const state = await this.#connectFromApi();
+      const connecting = this.connect();
+      generation = this.#generation;
+      const state = await connecting;
       if (state.status === 'offline' && !this.#closing) this.#scheduleReconnect();
     } catch (error) {
+      if (this.#closing || generation !== this.#generation) return;
       this.#emitError(error);
       const retryAfterMs = error instanceof LiveApiError ? error.retryAfterMs ?? 0 : 0;
       if (!this.#closing && isRetryable(error)) this.#scheduleReconnect(retryAfterMs);
@@ -388,6 +426,10 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
 
   #announceOffline(): void {
     this.emit('offline');
+  }
+
+  #checkGeneration(generation: number): void {
+    if (this.#closing || generation !== this.#generation) throw new SocketError('connection cancelled');
   }
 
   #emitTypedEvent(event: LiveEvent): void {

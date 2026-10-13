@@ -138,12 +138,15 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   readonly #options: ResolvedOptions;
   #socket: WebSocketLike | null = null;
   #heartbeat: NodeJS.Timeout | null = null;
+  #reconnectTimer: NodeJS.Timeout | null = null;
   #signer: SignerLike | null = null;
   #guestSession: Promise<void> | null = null;
   #guestMode = false;
   #guestRefreshAttempted = false;
   #connecting: Promise<ClientState> | null = null;
   #closing = false;
+  #generation = 0;
+  #cancelOpen: (() => void) | null = null;
   #attempt = 0;
 
   /// `uniqueId` is the `@handle`. Everything else has a working default.
@@ -182,7 +185,11 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   connect(): Promise<ClientState> {
     if (this.connected) return Promise.resolve(this.state());
     if (this.#connecting) return this.#connecting;
-    const connecting = this.#connect();
+    this.#closing = false;
+    if (this.#reconnectTimer) clearTimeout(this.#reconnectTimer);
+    this.#reconnectTimer = null;
+    const generation = ++this.#generation;
+    const connecting = this.#connect(generation);
     this.#connecting = connecting;
     void connecting.finally(() => {
       if (this.#connecting === connecting) this.#connecting = null;
@@ -190,13 +197,14 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     return connecting;
   }
 
-  async #connect(): Promise<ClientState> {
-    this.#closing = false;
+  async #connect(generation: number): Promise<ClientState> {
 
     await this.#ensureSession();
+    this.#checkGeneration(generation);
 
     if (!this.roomId) {
       const lookup = await this.discovery.roomLookup(this.uniqueId);
+      this.#checkGeneration(generation);
       if (!lookup.isLive) {
         throw new NotLiveError(`@${this.uniqueId} is not live (status ${lookup.status})`);
       }
@@ -207,16 +215,20 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     // Metadata and the gift table are read once, not per event: the gift list is megabytes, and it
     // is what turns a repeat gift message — which omits its own detail block — into a real value.
     if (this.#options.fetchRoomInfo) {
-      this.roomInfo = await this.discovery.roomInfo(this.roomId).catch(() => null);
+      const roomInfo = await this.discovery.roomInfo(this.roomId).catch(() => null);
+      this.#checkGeneration(generation);
+      this.roomInfo = roomInfo;
     }
     if (this.#options.fetchGifts) {
-      this.gifts = await this.discovery.giftList(this.roomId).catch(() => new Map<string, Gift>());
+      const gifts = await this.discovery.giftList(this.roomId).catch(() => new Map<string, Gift>());
+      this.#checkGeneration(generation);
+      this.gifts = gifts;
     }
 
     await this.#ensureSigner();
 
-    if (this.#closing) throw new Error('connection cancelled');
-    await this.#open();
+    this.#checkGeneration(generation);
+    await this.#open(generation);
     return this.state();
   }
 
@@ -280,6 +292,12 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   /// Close the socket and stop reconnecting.
   disconnect(): void {
     this.#closing = true;
+    this.#generation += 1;
+    this.#connecting = null;
+    this.#cancelOpen?.();
+    this.#cancelOpen = null;
+    if (this.#reconnectTimer) clearTimeout(this.#reconnectTimer);
+    this.#reconnectTimer = null;
     this.#stopHeartbeat();
     try {
       this.#socket?.close();
@@ -292,7 +310,8 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
 
   // --- the socket ------------------------------------------------------------------------------
 
-  async #open(): Promise<void> {
+  async #open(generation: number): Promise<void> {
+    this.#checkGeneration(generation);
     const jar = parseCookies(this.#options.cookie);
     const config = socketConfig({
       roomId: this.roomId,
@@ -340,9 +359,17 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
         reject(new Error(`the socket did not open within ${OPEN_TIMEOUT_MS} ms`));
       }, OPEN_TIMEOUT_MS);
 
+      this.#cancelOpen = () => {
+        clearTimeout(timer);
+        if (!settled) {
+          settled = true;
+          reject(new Error('connection cancelled'));
+        }
+      };
+
       socket.addEventListener('open', () => {
         if (settled) return;
-        if (this.#closing) {
+        if (this.#closing || generation !== this.#generation || this.#socket !== socket) {
           settled = true;
           clearTimeout(timer);
           socket.close();
@@ -362,17 +389,25 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
           settled = true;
           resolve();
         }
+        this.#cancelOpen = null;
         this.emit('connected', this.state());
       });
 
-      socket.addEventListener('message', (message) => this.#receive(message.data));
+      socket.addEventListener('message', (message) => {
+        if (!this.#closing && this.#socket === socket && generation === this.#generation) this.#receive(message.data);
+      });
 
       socket.addEventListener('error', (event) => {
+        if (this.#socket !== socket || generation !== this.#generation) return;
         const error = new Error(event.message ?? 'socket error');
-        if (settled) this.emit('error', error);
+        if (settled) this.#emitError(error);
       });
 
       socket.addEventListener('close', (event) => {
+        clearTimeout(timer);
+        if (this.#socket !== socket) return;
+        this.#cancelOpen = null;
+        this.#socket = null;
         this.connected = false;
         this.#stopHeartbeat();
         clearTimeout(timer);
@@ -407,11 +442,12 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   }
 
   #receive(data: ArrayBuffer | ArrayBufferView): void {
+    const generation = this.#generation;
     let frame;
     try {
       frame = decodePushFrame(data);
     } catch (error) {
-      this.emit('error', toError(error));
+      this.#emitError(error);
       return;
     }
     // `hb`, `ack` and `im_enter_room_resp` are the transport talking to itself.
@@ -421,7 +457,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     try {
       batch = decodeBatch(decompress(frame));
     } catch (error) {
-      this.emit('error', toError(error));
+      this.#emitError(error);
       return;
     }
 
@@ -442,7 +478,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
       try {
         this.#socket?.send(ackFrame(frame, batch.internalExt));
       } catch (error) {
-        this.emit('error', toError(error));
+        this.#emitError(error);
       }
     }
 
@@ -450,8 +486,11 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
       const event = this.#enrich(decodeEvent(message.method, message.payload));
       event.msgId = message.msgId.toString();
       event.isHistory = message.isHistory;
-      this.emit('event', event);
-      this.#emitTypedEvent(event);
+      if (this.#closing || generation !== this.#generation) break;
+      try {
+        this.emit('event', event);
+        if (!this.#closing && generation === this.#generation) this.#emitTypedEvent(event);
+      } catch (error) { this.#emitError(error); }
     }
   }
 
@@ -492,30 +531,38 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   }
 
   #scheduleReconnect(): void {
+    if (this.#closing || this.#reconnectTimer) return;
     const { attempts, initialMs, maxMs } = this.#options.reconnect;
     if (this.#attempt >= attempts) {
-      this.emit('error', new Error(`gave up after ${attempts} reconnection attempts`));
+      this.#emitError(new Error(`gave up after ${attempts} reconnection attempts`));
       return;
     }
     this.#attempt += 1;
     const delayMs = Math.min(initialMs * 2 ** (this.#attempt - 1), maxMs);
     this.emit('reconnecting', { attempt: this.#attempt, delayMs });
+    const generation = this.#generation;
     const timer = setTimeout(() => {
-      if (this.#closing) return;
+      this.#reconnectTimer = null;
+      if (this.#closing || generation !== this.#generation) return;
       // Re-signed from scratch: the previous signature is what the server just stopped accepting.
       void this.#reconnect();
     }, delayMs);
     timer.unref?.();
+    this.#reconnectTimer = timer;
   }
 
   async #reconnect(): Promise<void> {
+    let generation = this.#generation;
     try {
-      await this.#open();
+      const connecting = this.connect();
+      generation = this.#generation;
+      await connecting;
       return;
     } catch (error) {
+      if (this.#closing || generation !== this.#generation) return;
       const refusal = isHandshakeRejected(error);
       if (!refusal) {
-        this.emit('error', toError(error));
+        this.#emitError(error);
         if (!this.#closing) this.#scheduleReconnect();
         return;
       }
@@ -526,15 +573,23 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
         this.#guestRefreshAttempted = true;
         try {
           await this.#refreshGuestSession();
-          if (!this.#closing) await this.#open();
+          if (!this.#closing && generation === this.#generation) await this.connect();
         } catch (refreshError) {
-          if (!this.#closing) this.emit('error', toError(refreshError));
+          if (!this.#closing) this.#emitError(refreshError);
         }
         return;
       }
 
-      if (!this.#closing) this.emit('error', toError(error));
+      if (!this.#closing) this.#emitError(error);
     }
+  }
+
+  #emitError(error: unknown): void {
+    if (this.listenerCount('error') > 0) this.emit('error', toError(error));
+  }
+
+  #checkGeneration(generation: number): void {
+    if (this.#closing || generation !== this.#generation) throw new Error('connection cancelled');
   }
 
   #emitTypedEvent(event: LiveEvent): void {
