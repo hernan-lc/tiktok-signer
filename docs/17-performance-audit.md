@@ -172,3 +172,33 @@ customer/global bounds, 1000 lease create/drop cycles, error-path permit release
 and an offline local WebSocket integration proving the permit survives upgrade,
 a second connection gets 429, idle cleanup closes both legs and returns the gauge
 to zero. Slow-reader/writer load, shared observability and broker soak remain open.
+
+## Android history and JNI cleanup
+
+Application-scoped EventsRepository batches UI history/statistic snapshots every
+50 ms (configurable). It counts every business event and retains the existing
+300-record newest-first history. Reward/action processing remains per event in
+the ordered application collector. Unscoped construction retains immediate
+publication for source compatibility. A session reset cancels pending snapshot
+publication; the application scope owns the single pending job.
+
+Three new JVM tests cover 1000 events, exact totals, history ordering/bounds,
+pause/reset behavior and immediate legacy publication. Android unit tests,
+assembleDebug and assembleRelease passed. Existing Kotlin deprecation and ONNX
+unchecked-cast warnings remain outside these changes. Android main-thread native
+handoff is still incomplete; this history change does not bound Handler posting.
+Mobile disconnect now avoids joining its own callback thread (Drop already had
+that safeguard); a no-network self-disconnect regression and mobile default/JNI
+feature tests and Clippy passed. Device navigation/instrumentation remains open.
+
+## Additional validation
+
+Java SDK offline tests and example compilation passed with JDK 21/Gradle 8.14.3.
+Workspace tests passed. Workspace Clippy passes on Rust 1.99 after replacing an
+existing parity helper's constant chunks_exact with MSRV-compatible as_chunks.
+The workspace webmssdk.js SHA-256 matches the pinned digest. QuickJS and V8
+feature test suites passed using TTL_BUNDLE pointing at that verified local file,
+including pinned parity against Node. Node real-bundle tests now execute rather
+than skipping; one network integration test stays intentionally skipped offline.
+Bootstrap compilation is cached once as an immutable vm.Script; each identity
+still runs it in its own mutable context, verified with an offline isolation test.

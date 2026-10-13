@@ -120,7 +120,9 @@ impl LiveClient {
     pub fn disconnect(mut self) {
         self.stop.send_replace(true);
         if let Some(w) = self.worker.take() {
-            let _ = w.join();
+            if w.thread().id() != thread::current().id() {
+                let _ = w.join();
+            }
         }
     }
 }
@@ -147,6 +149,26 @@ mod tests {
             sec_uid: String::new(),
             avatar_url: None,
         }
+    }
+
+    #[test]
+    fn callback_initiated_disconnect_never_joins_itself() {
+        let (stop, rx) = watch::channel(false);
+        let (give_client, receive_client) = std::sync::mpsc::sync_channel::<LiveClient>(1);
+        let (finished, done) = std::sync::mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            receive_client.recv().unwrap().disconnect();
+            finished.send(*rx.borrow()).unwrap();
+        });
+        give_client
+            .send(LiveClient {
+                stop,
+                worker: Some(worker),
+            })
+            .unwrap();
+        assert!(done
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap());
     }
 
     #[test]
