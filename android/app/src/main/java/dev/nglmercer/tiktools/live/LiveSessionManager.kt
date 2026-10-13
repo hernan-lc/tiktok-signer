@@ -67,10 +67,7 @@ class LiveSessionManager(
                                             token == generation &&
                                                 !_events.tryEmit(EventParser.parse(json))
                                         )
-                                            Logger.append(
-                                                "EVENTS",
-                                                "Consumer overloaded; event dropped",
-                                            )
+                                            disconnect("Event consumer overloaded; LIVE connection stopped", failed = true)
                                     }
 
                                     override fun onState(kind: String, detail: String) {
