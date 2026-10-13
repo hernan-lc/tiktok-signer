@@ -87,3 +87,19 @@ WebSocket need_ack=false disables ACKs. That protocol verification remains open.
 The regression compares the redacted real batch with FetchResult decoding and
 checks changed/empty/malformed extensions. All 10 transport tests and all-target
 Clippy passed. Local-socket ACK/heartbeat/cancellation stress is still pending.
+
+## Embedded signing
+
+Default capacity is 64 queued requests plus one executing request; overload returns
+`DiscoveryError::Signer` without blocking the submitting executor thread.
+`Signer::with_config` configures capacity and request timeout (default 30 seconds).
+Cancelled/expired queued requests are skipped. `metrics()` exposes queue depth,
+rejections and worker panic failures without identity labels. Warm contexts remain
+isolated per worker. Drop closes the queue and joins after the in-progress engine
+call; use `shutdown().await` to move that join off an executor. Deadlines cannot
+preempt a JS engine call already in progress. No worker pool was introduced.
+
+Validated: embedded tests and all-target Clippy passed, including queue saturation,
+receiver cancellation, timeout-before-execution, worker panic, failed initialization
+and repeated create/drop. Engine fixture tests may skip without their expected
+bundle; QuickJS/V8 real-bundle parity and pool benchmarks remain pending.

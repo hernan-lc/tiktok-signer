@@ -32,7 +32,12 @@
 
 use std::marker::PhantomData;
 use std::sync::mpsc;
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc,
+};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use ttl_live_discovery::{DiscoveryError, SignFuture, SigningProduct, UrlSigner};
 
@@ -118,11 +123,42 @@ struct Request {
     url: String,
     product: SigningProduct,
     reply: tokio::sync::oneshot::Sender<Result<String, String>>,
+    deadline: Instant,
+}
+
+/// Capacity bounds waiting requests; each engine executes one additional request.
+#[derive(Debug, Clone, Copy)]
+pub struct SignerConfig {
+    pub queue_capacity: usize,
+    pub request_timeout: Duration,
+}
+impl Default for SignerConfig {
+    fn default() -> Self {
+        Self {
+            queue_capacity: 64,
+            request_timeout: Duration::from_secs(30),
+        }
+    }
+}
+#[derive(Default)]
+struct Counters {
+    stopping: AtomicBool,
+    rejections: AtomicU64,
+    failures: AtomicU64,
+}
+#[derive(Debug, Clone, Copy)]
+pub struct SignerMetrics {
+    pub queue_depth: usize,
+    pub queue_rejections: u64,
+    pub worker_failures: u64,
 }
 
 /// A signer holding a warm engine on its own thread.
 pub struct Signer<E: Engine> {
-    requests: mpsc::Sender<Request>,
+    requests: Option<tokio::sync::mpsc::Sender<Request>>,
+    worker: Option<thread::JoinHandle<()>>,
+    config: SignerConfig,
+    counters: Arc<Counters>,
     product: SigningProduct,
     // The engine never crosses the thread, so this is a type tag and nothing more.
     engine: PhantomData<fn() -> E>,
@@ -176,19 +212,58 @@ impl<E: Engine + 'static> Signer<E> {
         profile: Profile,
         product: SigningProduct,
     ) -> Result<Self, EmbeddedError> {
+        Self::with_config(bundle, profile, product, SignerConfig::default())
+    }
+
+    /// Configurable bounded queue. Submission rejects overload without blocking an executor.
+    pub fn with_config(
+        bundle: impl Into<String>,
+        profile: Profile,
+        product: SigningProduct,
+        config: SignerConfig,
+    ) -> Result<Self, EmbeddedError> {
+        if config.queue_capacity == 0 || config.request_timeout.is_zero() {
+            return Err(EmbeddedError::Engine(
+                "queue capacity and request timeout must be positive".into(),
+            ));
+        }
         let bundle = bundle.into();
         let options = profile.to_json();
-        let (requests, incoming) = mpsc::channel::<Request>();
+        let (requests, incoming) = tokio::sync::mpsc::channel::<Request>(config.queue_capacity);
+        let counters = Arc::new(Counters::default());
+        let worker_counters = counters.clone();
         let (ready, started) = mpsc::channel::<Result<(), EmbeddedError>>();
 
-        thread::Builder::new()
+        let worker = thread::Builder::new()
             .name(format!("ttl-sign-{}", E::NAME.to_lowercase()))
-            .spawn(move || worker::<E>(bundle, options, ready, incoming))
+            .spawn(move || {
+                let monitor = worker_counters.clone();
+                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    worker::<E>(bundle, options, ready, incoming, worker_counters)
+                }))
+                .is_err()
+                {
+                    monitor.failures.fetch_add(1, Ordering::Relaxed);
+                }
+            })
             .map_err(|error| EmbeddedError::Engine(error.to_string()))?;
 
-        started.recv().map_err(|_| EmbeddedError::Stopped)??;
+        match started
+            .recv()
+            .map_err(|_| EmbeddedError::Stopped)
+            .and_then(|result| result)
+        {
+            Ok(()) => (),
+            Err(error) => {
+                let _ = worker.join();
+                return Err(error);
+            }
+        }
         Ok(Self {
-            requests,
+            requests: Some(requests),
+            worker: Some(worker),
+            config,
+            counters,
             product,
             engine: PhantomData,
         })
@@ -202,16 +277,57 @@ impl<E: Engine + 'static> Signer<E> {
     ) -> Result<String, DiscoveryError> {
         let (reply, answer) = tokio::sync::oneshot::channel();
         self.requests
-            .send(Request {
+            .as_ref()
+            .ok_or_else(|| DiscoveryError::Signer("the signer thread stopped".into()))?
+            .try_send(Request {
                 url: url.to_string(),
                 product,
                 reply,
+                deadline: Instant::now() + self.config.request_timeout,
             })
-            .map_err(|_| DiscoveryError::Signer("the signer thread stopped".into()))?;
-        answer
+            .map_err(|error| match error {
+                tokio::sync::mpsc::error::TrySendError::Full(_) => {
+                    self.counters.rejections.fetch_add(1, Ordering::Relaxed);
+                    DiscoveryError::Signer("the signer request queue is full".into())
+                }
+                tokio::sync::mpsc::error::TrySendError::Closed(_) => {
+                    DiscoveryError::Signer("the signer thread stopped".into())
+                }
+            })?;
+        tokio::time::timeout(self.config.request_timeout, answer)
             .await
+            .map_err(|_| DiscoveryError::Signer("the signer request timed out".into()))?
             .map_err(|_| DiscoveryError::Signer("the signer thread dropped the request".into()))?
             .map_err(DiscoveryError::Signer)
+    }
+}
+
+impl<E: Engine> Signer<E> {
+    pub fn metrics(&self) -> SignerMetrics {
+        SignerMetrics {
+            queue_depth: self
+                .requests
+                .as_ref()
+                .map_or(0, |s| s.max_capacity() - s.capacity()),
+            queue_rejections: self.counters.rejections.load(Ordering::Relaxed),
+            worker_failures: self.counters.failures.load(Ordering::Relaxed),
+        }
+    }
+    /// Move deterministic cleanup off an async executor. Drop also joins the worker.
+    pub async fn shutdown(self)
+    where
+        E: 'static,
+    {
+        let _ = tokio::task::spawn_blocking(move || drop(self)).await;
+    }
+}
+impl<E: Engine> Drop for Signer<E> {
+    fn drop(&mut self) {
+        self.counters.stopping.store(true, Ordering::Release);
+        self.requests.take();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
     }
 }
 
@@ -226,7 +342,8 @@ fn worker<E: Engine>(
     bundle: String,
     options: String,
     ready: mpsc::Sender<Result<(), EmbeddedError>>,
-    incoming: mpsc::Receiver<Request>,
+    mut incoming: tokio::sync::mpsc::Receiver<Request>,
+    counters: Arc<Counters>,
 ) {
     let mut engine = match E::start(&bundle, &options) {
         Ok(engine) => {
@@ -241,7 +358,13 @@ fn worker<E: Engine>(
 
     // One request at a time, in arrival order. The channel closing ends the thread, which is how a
     // dropped signer shuts its engine down.
-    while let Ok(request) = incoming.recv() {
+    while let Some(request) = incoming.blocking_recv() {
+        if counters.stopping.load(Ordering::Acquire) {
+            break;
+        }
+        if request.reply.is_closed() || Instant::now() >= request.deadline {
+            continue;
+        }
         let answer = engine.sign(&request.url, product_arg(request.product));
         let _ = request.reply.send(answer);
     }
