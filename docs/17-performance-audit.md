@@ -7,20 +7,22 @@ compatibility justification. All benchmarks use committed offline fixtures.
 ## Progress
 
 - [ ] Phase 0: complete baseline, lifecycle audit and issue inventory
-- [ ] Phase 1: decoder modes and allocation reduction
+- [x] Phase 1: decoder modes and allocation reduction
 - [ ] Phase 2: ACK and transport lifecycle
-- [ ] Phase 3: bounded embedded signing and cancellation
-- [ ] Phase 4: native callback delivery and ownership
+- [x] Phase 3: bounded embedded signing and cancellation
+- [x] Phase 4: native callback delivery and ownership
 - [ ] Phase 5: Node bounds and lifecycle
-- [ ] Phase 6: broker/relay resource limits and metrics
+- [x] Phase 6: broker/relay resource limits and metrics
 - [ ] Phase 7: Android/JNI handoff and history batching
-- [ ] Phase 8: shared overload and lifecycle documentation
+- [x] Phase 8: shared overload and lifecycle documentation
 - [ ] Phase 9: stress, soak and benchmark comparisons
 - [ ] Phase 10: quality checks and documentation
 
 Unchecked items are incomplete, including tests not run on supported platforms.
 
 ## Verified inventory at baseline
+
+This table records the starting implementation, not the current completion status.
 
 | Component | Finding | Status |
 | --- | --- | --- |
@@ -40,6 +42,10 @@ Unchecked items are incomplete, including tests not run on supported platforms.
 | Android history | Bounded 300 records, copied on each event | Bound already implemented; batching pending |
 
 ## Reproduction and measurement
+
+The following entries are an incremental audit journal. Earlier statements about
+pending work are superseded by the later completed checks and measurements.
+The progress checklist above and final limitations below remain authoritative.
 
 `cargo run --release -p ttl-live-events --example decode_bench` warms the decoder
 and measures 10,000 complete batch decode/drop cycles. It reports events/second
@@ -347,3 +353,34 @@ independent sample source; policy layout and deterministic default delays remain
 unchanged. Jitter tests prove the configured ceiling. Broker-backed Node already
 had jitter. Core transport regression tests now explicitly cancel a blocked
 handshake and an idle socket read without delivering stale callbacks.
+
+
+## Current remaining verification
+
+- Phase 0/9: restarted Node thirty-minute lifecycle soak has not finished. Its
+  interrupted predecessor is not evidence of a completed soak.
+- Phase 2: ACK extension/log-ID fixtures and loopback tests pass; server behavior
+  for captured `need_ack=false` WebSocket batches remains unverified. Legacy
+  Rust/Java ACK frequency is preserved pending protocol evidence.
+- Phase 5: bounded delivery, shutdown, reconnect and decompression regression tests
+  pass. Final Node sustained-memory result remains pending.
+- Phase 7: host JNI ownership tests, Android JVM/Robolectric burst/reset tests,
+  four native ABI builds, debug/release compilation and lint pass. Real device
+  instrumentation, foreground/background/navigation memory profiling and actual
+  UI-frame responsiveness remain unverified because no device/emulator is present.
+- Phase 10: local checks pass; hosted PR CI has not yet executed. macOS/Windows
+  native jobs and release/device runtime execution remain platform checks, not
+  claims inferred from Linux builds.
+
+Offline broker concurrency samples (fake discovery/signing): baseline/current
+accepted 10/10, 82/98, 193/186 requests at concurrency 10/100/1000. Rejection count
+is load-scheduling dependent because setup semaphores deliberately reject rather
+than retain an unlimited waiter queue. Baseline/current total elapsed ns:
+383747/438140, 2586606/3493406, 16374636/19024203. These single debug-build samples
+establish reproducible capacity/cleanup coverage, not a speedup. All permits and
+single-flight entries were released after completion.
+
+Node final single-run baseline/current decode comparison: 45,273/46,710 events/sec,
+batch p50 0.266/0.262 ms, p95 0.421/0.375 ms, p99 0.560/0.544 ms; max RSS
+107372/106112 KiB. Repeated Rust comparisons are preferred for default-path
+regression assessment; neither single Node timing proves a percentage improvement.
