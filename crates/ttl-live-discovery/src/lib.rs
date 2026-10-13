@@ -45,6 +45,31 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 /// harm done.
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 
+// Check every decoded HTTP chunk before retaining it, including chunked/gzip responses.
+async fn read_bounded(
+    mut response: reqwest::Response,
+    limit: usize,
+) -> Result<String, DiscoveryError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
+    {
+        return Err(DiscoveryError::TooLarge(limit));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| DiscoveryError::Transport(error.to_string()))?
+    {
+        if chunk.len() > limit.saturating_sub(body.len()) {
+            return Err(DiscoveryError::TooLarge(limit));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&body).into_owned())
+}
+
 /// A discovery operation and what it needs beyond plain HTTP.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DiscoveryOperation {
@@ -193,18 +218,7 @@ impl DiscoveryClient {
             .map_err(|error| DiscoveryError::Transport(error.to_string()))?;
 
         let status = response.status().as_u16();
-        if let Some(length) = response.content_length() {
-            if length > MAX_BODY_BYTES as u64 {
-                return Err(DiscoveryError::TooLarge(MAX_BODY_BYTES));
-            }
-        }
-        let body = response
-            .text()
-            .await
-            .map_err(|error| DiscoveryError::Transport(error.to_string()))?;
-        if body.len() > MAX_BODY_BYTES {
-            return Err(DiscoveryError::TooLarge(MAX_BODY_BYTES));
-        }
+        let body = read_bounded(response, MAX_BODY_BYTES).await?;
 
         interpret_room_lookup(unique_id, status, &body)
     }
@@ -478,6 +492,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn chunked_http_bodies_are_bounded_before_retention() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = [0; 4096];
+            assert!(socket.read(&mut request).unwrap() > 0);
+            socket.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n8\r\n12345678\r\n8\r\nabcdefgh\r\n0\r\n\r\n").unwrap();
+        });
+        let response = reqwest::get(format!("http://{address}/")).await.unwrap();
+        assert!(matches!(
+            read_bounded(response, 12).await,
+            Err(DiscoveryError::TooLarge(12))
+        ));
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
     async fn a_signer_is_invoked_for_signed_routes() {
         let signed = StubSigner
             .sign("https://example.invalid/webcast/gift/list/?room_id=1")
@@ -711,10 +744,7 @@ impl DiscoveryClient {
         if !(200..300).contains(&status) {
             return Err(DiscoveryError::Status { status });
         }
-        let body = response
-            .text()
-            .await
-            .map_err(|error| DiscoveryError::Transport(error.to_string()))?;
+        let body = read_bounded(response, 16 * 1024 * 1024).await?;
         if body.is_empty() {
             // A signed request that is accepted but answered with nothing means the identity was
             // insufficient, not that the room is empty. Reported distinctly so a caller does not
