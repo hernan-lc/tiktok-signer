@@ -36,6 +36,8 @@ Node reuses immutable compiled bootstrap code in a fresh context for each signer
 identity. Bundle download single-flight entries are capped at 16, evicted on
 completion, and never cache mutable contexts. Downloaded source is capped at
 8 MiB and checked against the existing expected digest before cache replacement.
+`loadBundle` accepts `timeoutMs` (30 seconds by default); expired downloads release
+their single-flight entry. Guest bootstrap and retry waits are cancelled on disconnect.
 Sandbox pending fake timers are capped at 1024; diagnostic access keys at 4096.
 
 ## Native callback delivery
@@ -71,7 +73,8 @@ immediate timer. Defaults for enabled delivery are 64 MiB byte charge, 64 events
 per drain and 8 ms per turn. Byte charges are conservative estimates rather than
 heap accounting. Count capacity is capped at 65536.
 
-ACK processing precedes delivery. Overflow clears pending events, disconnects the
+ACK processing precedes delivery. Async draining yields between bounded groups;
+a single CPU-blocking listener cannot be preempted on the main JavaScript thread. Overflow clears pending events, disconnects the
 transport and reports an error. Disconnect clears pending delivery and reconnect
 work. Listener exceptions are reported without corrupting transport state; typed
 listeners can still receive an event if a generic listener throws. Delivery

@@ -6,17 +6,19 @@ compatibility justification. All benchmarks use committed offline fixtures.
 
 ## Progress
 
-- [ ] Phase 0: complete baseline, lifecycle audit and issue inventory
+- [x] Phase 0: supported baseline, lifecycle audit and verified issue inventory
 - [x] Phase 1: decoder modes and allocation reduction
 - [x] Phase 2: ACK and transport lifecycle
 - [x] Phase 3: bounded embedded signing and cancellation
 - [x] Phase 4: native callback delivery and ownership
-- [ ] Phase 5: Node bounds and lifecycle
+- [x] Phase 5: Node bounds, lifecycle, supported-runtime tests and completed soak
 - [x] Phase 6: broker/relay resource limits and metrics
-- [ ] Phase 7: Android/JNI handoff and history batching
+- [x] Phase 7: Android/JNI handoff, history batching and supported host/build checks
+- [ ] Android device instrumentation and on-device profiling (environment unavailable)
 - [x] Phase 8: shared overload and lifecycle documentation
-- [ ] Phase 9: stress, soak and benchmark comparisons
-- [ ] Phase 10: quality checks and documentation
+- [x] Phase 9: supported offline stress, soaks and benchmark comparisons
+- [x] Phase 10: local quality checks, CI definitions and documentation
+- [ ] Hosted macOS/Windows CI execution (repository Actions disabled)
 
 Unchecked items are incomplete, including tests not run on supported platforms.
 
@@ -357,13 +359,14 @@ handshake and an idle socket read without delivering stale callbacks.
 
 ## Current remaining verification
 
-- Phase 0/9: restarted Node thirty-minute lifecycle soak has not finished. Its
-  interrupted predecessor is not evidence of a completed soak.
+- Phase 0/9: restarted Node thirty-minute lifecycle soak completed; its interrupted
+  predecessor remains excluded from acceptance measurements.
 - Phase 2: public player transport source now verifies ACK gating and empty-extension
   behavior. Shared golden fixtures and loopback tests pass. Actual captured server
   acceptance is not claimed; no real LIVE traffic is needed for offline validation.
-- Phase 5: bounded delivery, shutdown, reconnect and decompression regression tests
-  pass. Final Node sustained-memory result remains pending.
+- Phase 5: bounded delivery, shutdown, reconnect and decompression regressions and
+  thirty-minute sustained-memory run pass; final initialization fixes also passed
+  a fresh short lifecycle smoke and prior-commit failure reproduction.
 - Phase 7: host JNI ownership tests, Android JVM/Robolectric burst/reset tests,
   four native ABI builds, debug/release compilation and lint pass. Real device
   instrumentation, foreground/background/navigation memory profiling and actual
@@ -429,3 +432,82 @@ The loopback benchmark now explicitly appends `need_ack=true` to the sanitized
 HTTP capture (which itself has false/default). Earlier benchmark figures describe
 the pre-gating implementation. New measurements use the same ACK-requesting
 synthetic workload for baseline and current binaries.
+
+
+## Final compatibility and supported-runtime checks
+
+Node 22 (the declared minimum) passed 79 direct-SDK tests and 15 broker-SDK tests;
+one real-network integration test remains deliberately skipped. The final direct
+SDK regression reproduces a cancelled signer-context overwrite on isolated prior
+commit 684512b and passes after guarding context assignment by generation. Guest
+bootstrap is aborted on disconnect, retry waits own removable abort listeners,
+and shared bundle downloads have a configurable 30-second default timeout.
+
+An applicable native clone/free/raw/schema-pointer test passed Miri in addition
+to protobuf Miri coverage. Native ASan/TSan checks instrument Rust code; separately
+compiled QuickJS/V8 C/C++ internals are not claimed to have equivalent sanitizer
+coverage. Source-provenance fixtures pass repository hygiene tests.
+
+Host signing example binary sizes (release ELF, same build settings, bundle not
+embedded): QuickJS 2,919,920 bytes; V8 68,116,552 bytes. One-worker concurrency-10
+samples: QuickJS 35.95 signatures/sec and V8 343.73. Worker count does not change
+the selected engine dependency footprint; each extra context increases retained
+engine memory. These synthetic samples justify keeping resource-efficient single
+worker defaults while exposing the benchmark's independent-context comparison.
+
+Verified ACK-requesting loopback workload (1000 batches): baseline/current plain
+ACK p50/p95/p99 26,368/32,861/63,545 vs 26,640/39,455/56,303 ns; gzip
+46,125/61,302/74,449 vs 46,940/106,193/129,249 ns. Single-run upper-tail variance
+is not a speedup claim. Plain requested allocation traffic including loopback peer
+was 154,659.94 vs 129,029.84 bytes/batch. The implementation changes ownership and
+protocol correctness without adding per-frame worker scheduling.
+
+Workspace dependency metadata confirms 16 Rust workspace crates. `ttl-sign-core`
+provides pure protocol/URL primitives; `ttl-live-proto` descriptors feed events;
+`ttl-live-ws` owns transport; `ttl-live-core` combines transport/decoding and
+cancellation. Native/mobile own platform workers and handles. Discovery depends
+on core; embedded engines implement discovery's signer capability; headless and
+broker/server compose those capabilities. Replay/native research implementations
+and fixture/lab tooling remain separate offline consumers. Node SDKs share frame,
+event and discovery code; Java has proto/core/client/presence/native modules;
+Android uses the mobile JNI bridge. No browser dependency or production worker
+pool was introduced.
+
+
+## Completed Node thirty-minute soak
+
+The restarted process exited successfully after 1800.02 seconds and 1794
+connect/disconnect cycles. Delivered 591,292 / 2,965,020 / 11,430,862 events in
+independent ten-minute targets of 1000 / 5000 / 20000 events/sec (actual average
+rates about 985 / 4942 / 19051). Total delivered 14,987,174. There were zero
+errors, listener failures, queue rejections and active sockets at cleanup.
+760 queued events were explicitly discarded at manual cycle disconnect, not
+silently lost while continuing an overloaded stream. The completed-cycle metrics
+had queue depth and byte charge zero. Each cycle asserted no callbacks from stale
+sockets after disconnect.
+
+Baseline/maximum sampled/cleanup RSS was 89,448,448 / 103,874,560 / 88,424,448 bytes.
+Baseline/maximum sampled/cleanup JS used heap was 21,794,784 / 48,567,608 /
+28,108,528 bytes. Heap capacity at cleanup was 83,935,232 bytes: capacity/RSS
+includes allocator and V8 retention, while used heap oscillated as GC reclaimed
+transient events. Fixed fixture/context references remained intentionally live;
+this is not a claim that all pages return to the OS. No unbounded live-object or
+queue growth was observed. The final signer-initialization changes were validated
+with their failing-before/passing-after regression and a fresh three-second
+1000/5000/20000-target smoke; the thirty-minute event-pipeline run is not relabeled
+as a new run of those later initialization changes.
+
+## Remaining limitations, explicitly unverified
+
+- Device instrumentation/navigation/background lifecycle and device UI/memory
+  profiling: no connected device, installed emulator executable, or /dev/kvm.
+- Hosted native macOS/Windows jobs: repository GitHub Actions disabled.
+- Real captured TikTok server acceptance is not inferred from synthetic fixtures;
+  public player source supports ACK semantics and offline tests verify encoding.
+- Application code must return from native callbacks and JS engine calls for
+  deterministic joining to finish. Node asynchronous drains yield between bounded
+  groups; they cannot preempt a single CPU-blocking listener running on the main
+  JavaScript thread. Public synchronous defaults remain compatible.
+- Sanitizer coverage is Rust-native/caller coverage, not full instrumentation of
+  embedded third-party C/C++ engines. Allocator/engine-global memory retention is
+  distinguished from live queue/context ownership in the measurements.
