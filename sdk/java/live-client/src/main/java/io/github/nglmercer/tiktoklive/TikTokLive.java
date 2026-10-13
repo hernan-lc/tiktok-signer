@@ -29,7 +29,8 @@ public final class TikTokLive implements AutoCloseable {
     private ScheduledFuture<?> heartbeat, reconnect;
     private CompletableFuture<LiveState> pending;
     private WebSocket socket;
-    private long generation, heartbeatInterval;
+    private volatile long generation;
+    private long heartbeatInterval;
     private final java.util.concurrent.atomic.AtomicLong droppedCallbacks =
             new java.util.concurrent.atomic.AtomicLong();
     private int retries;
@@ -364,6 +365,8 @@ public final class TikTokLive implements AutoCloseable {
         boolean wasActive = active;
         active = false;
         ++generation;
+        droppedCallbacks.addAndGet(events.getQueue().size());
+        events.getQueue().clear();
         stopSocket();
         api.cancelPending();
         gifts = Map.of();
@@ -398,26 +401,27 @@ public final class TikTokLive implements AutoCloseable {
 
     private synchronized void emit(String name, Object value) {
         if (closed || deliveryStopped) return;
+        long token = generation;
         try {
             events.execute(
                     () -> {
-                        if (closed || deliveryStopped) return;
+                        if (closed || deliveryStopped || token != generation) return;
                         for (var listener :
                                 listeners.getOrDefault(name, new CopyOnWriteArrayList<>())) {
                             Runnable invocation =
                                     () -> {
-                                        if (closed) return;
+                                        if (closed || token != generation) return;
                                         try {
                                             listener.accept(value);
                                         } catch (Throwable e) {
-                                            if (!name.equals("error")) emit("error", e);
+                                            if (token == generation && !name.equals("error")) emit("error", e);
                                         }
                                     };
                             try {
                                 if (callback == null) invocation.run();
                                 else callback.execute(invocation);
                             } catch (RuntimeException e) {
-                                if (!name.equals("error")) emit("error", e);
+                                if (token == generation && !name.equals("error")) emit("error", e);
                             }
                         }
                     });
@@ -435,8 +439,9 @@ public final class TikTokLive implements AutoCloseable {
                 streaks.clear();
                 if (pending != null && !pending.isDone()) pending.cancel(false);
                 state = new LiveState(uniqueId, state.roomId(), state.status(), false);
+                long stoppedGeneration = generation;
                 events.execute(() -> {
-                    if (closed) return;
+                    if (closed || generation != stoppedGeneration) return;
                     var failure = new IllegalStateException("Event delivery overloaded; connection stopped");
                     for (var listener : listeners.getOrDefault("error", new CopyOnWriteArrayList<>())) {
                         try { listener.accept(failure); } catch (Throwable ignored) { /* Terminal notification. */ }

@@ -7,6 +7,31 @@ import org.junit.jupiter.api.Test;
 
 class DeliveryOverloadTest {
     @Test
+    void disconnectInvalidatesAlreadyQueuedBusinessCallbacks() throws Exception {
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        try (var client = TikTokLive.builder("creator").build()) {
+            client.onEvent(event -> {
+                calls.incrementAndGet(); entered.countDown();
+                try { release.await(5, TimeUnit.SECONDS); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            });
+            var emit = TikTokLive.class.getDeclaredMethod("emit", String.class, Object.class);
+            emit.setAccessible(true);
+            emit.invoke(client, "event", null);
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            emit.invoke(client, "event", null);
+            client.disconnect();
+            release.countDown();
+            var field = TikTokLive.class.getDeclaredField("events");
+            field.setAccessible(true);
+            ((ThreadPoolExecutor) field.get(client)).submit(() -> {}).get(5, TimeUnit.SECONDS);
+            assertEquals(1, calls.get());
+        } finally { release.countDown(); }
+    }
+
+    @Test
     void cancelledTimersReleaseRetainedTasksImmediately() throws Exception {
         try (var client = TikTokLive.builder("creator").build()) {
             var field = TikTokLive.class.getDeclaredField("timers");
