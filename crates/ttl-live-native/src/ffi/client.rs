@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::{
     sync::{Arc, Condvar, Mutex, MutexGuard},
     thread::{self, JoinHandle, ThreadId},
@@ -44,10 +45,36 @@ struct Callbacks {
     enabled: bool,
     active: usize,
     worker: Option<ThreadId>,
+    dispatcher: Option<ThreadId>,
+}
+enum Delivery {
+    Batch(ttl_live_events::EventBatch),
+    State(State, String),
+    Error(ResultCode, bool, i32, String),
+}
+impl Delivery {
+    fn event_count(&self) -> u64 {
+        match self {
+            Self::Batch(b) => b.events.len() as u64,
+            _ => 0,
+        }
+    }
+}
+#[derive(Default)]
+struct Dispatch {
+    capacity: usize,
+    sender: Option<tokio::sync::mpsc::Sender<Delivery>>,
 }
 struct Shared {
     callbacks: Mutex<Callbacks>,
     idle: Condvar,
+    dispatch: Mutex<Dispatch>,
+    stop: Mutex<Option<watch::Sender<bool>>>,
+    overloaded: AtomicBool,
+    received: AtomicU64,
+    dispatched: AtomicU64,
+    discarded: AtomicU64,
+    rejections: AtomicU64,
 }
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -61,28 +88,38 @@ impl Drop for Invocation<'_> {
     }
 }
 impl Shared {
-    fn invoke<T: Copy>(&self, select: impl FnOnce(&Callbacks) -> Option<T>, f: impl FnOnce(T)) {
+    fn invoke<T: Copy>(
+        &self,
+        select: impl FnOnce(&Callbacks) -> Option<T>,
+        f: impl FnOnce(T),
+    ) -> bool {
         let selected = {
             let mut c = lock(&self.callbacks);
             if !c.enabled {
-                return;
+                return false;
             }
             let Some(cb) = select(&c) else {
-                return;
+                return false;
             };
             c.active += 1;
             cb
         };
         let _invocation = Invocation(self);
         f(selected);
+        true
     }
     fn on_worker(&self) -> bool {
-        lock(&self.callbacks).worker == Some(thread::current().id())
+        {
+            let c = lock(&self.callbacks);
+            let id = Some(thread::current().id());
+            c.worker == id || c.dispatcher == id
+        }
     }
     fn update(&self, update: impl FnOnce(&mut Callbacks)) {
         let mut c = lock(&self.callbacks);
         update(&mut c);
-        if c.worker == Some(thread::current().id()) {
+        if c.worker == Some(thread::current().id()) || c.dispatcher == Some(thread::current().id())
+        {
             return;
         }
         while c.active != 0 {
@@ -92,7 +129,39 @@ impl Shared {
     fn disable(&self) {
         self.update(|c| c.enabled = false);
     }
+    fn enqueue(&self, delivery: Delivery) -> Option<Delivery> {
+        let mut dispatch = lock(&self.dispatch);
+        if dispatch.capacity == 0 {
+            return Some(delivery);
+        }
+        let Some(sender) = &dispatch.sender else {
+            self.discarded
+                .fetch_add(delivery.event_count(), Ordering::Relaxed);
+            return None;
+        };
+        match sender.try_send(delivery) {
+            Ok(()) => (),
+            Err(error) => {
+                self.discarded
+                    .fetch_add(error.into_inner().event_count(), Ordering::Relaxed);
+                self.rejections.fetch_add(1, Ordering::Relaxed);
+                self.overloaded.store(true, Ordering::Release);
+                dispatch.sender.take();
+                if let Some(stop) = lock(&self.stop).as_ref() {
+                    stop.send_replace(true);
+                }
+            }
+        }
+        None
+    }
     fn error(&self, code: ResultCode, retryable: bool, status: i32, message: &str) {
+        if let Some(Delivery::Error(code, retryable, status, message)) =
+            self.enqueue(Delivery::Error(code, retryable, status, message.into()))
+        {
+            self.deliver_error(code, retryable, status, &message);
+        }
+    }
+    fn deliver_error(&self, code: ResultCode, retryable: bool, status: i32, message: &str) {
         let s = cstring(message);
         let e = ErrorInfo {
             code,
@@ -110,8 +179,8 @@ impl Shared {
         );
     }
 }
-impl LiveSink for Shared {
-    fn on_state(&self, state: State, detail: &str) {
+impl Shared {
+    fn deliver_state(&self, state: State, detail: &str) {
         let s = cstring(detail);
         self.invoke(
             |c| c.state,
@@ -120,7 +189,7 @@ impl LiveSink for Shared {
             },
         );
     }
-    fn on_error(&self, e: Error, retryable: bool) {
+    fn report_error(&self, e: Error, retryable: bool) {
         let (code, msg) = match e {
             Error::Auth(_) => (ResultCode::Auth, "LIVE handshake refused"),
             Error::SocketStatus(_) => (ResultCode::Socket, "LIVE handshake failed"),
@@ -136,23 +205,89 @@ impl LiveSink for Shared {
         };
         self.error(code, retryable, status, msg);
     }
-    fn on_batch(&self, b: ttl_live_events::EventBatch) {
+    fn deliver_batch(&self, b: ttl_live_events::EventBatch) {
         let batch = NativeBatch::new(b);
-        self.invoke(
+        let batch_invoked = self.invoke(
             |c| c.batch,
             |(cb, data)| unsafe {
                 cb(data as *mut _, &batch);
             },
         );
-        for event in &batch.events {
-            self.invoke(
+        for (index, event) in batch.events.iter().enumerate() {
+            if self.overloaded.load(Ordering::Acquire) {
+                let remaining = (batch.events.len() - index) as u64;
+                if batch_invoked {
+                    self.dispatched.fetch_add(remaining, Ordering::Relaxed);
+                } else {
+                    self.discarded.fetch_add(remaining, Ordering::Relaxed);
+                }
+                break;
+            }
+            let invoked = self.invoke(
                 |c| c.event,
                 |(cb, data)| unsafe {
                     cb(data as *mut _, event);
                 },
             );
+            if invoked || batch_invoked {
+                self.dispatched.fetch_add(1, Ordering::Relaxed);
+            } else {
+                self.discarded.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
+}
+impl LiveSink for Shared {
+    fn on_state(&self, state: State, detail: &str) {
+        if let Some(Delivery::State(state, detail)) =
+            self.enqueue(Delivery::State(state, detail.into()))
+        {
+            self.deliver_state(state, &detail);
+        }
+    }
+    fn on_error(&self, error: Error, retryable: bool) {
+        self.report_error(error, retryable);
+    }
+    fn on_batch(&self, batch: ttl_live_events::EventBatch) {
+        self.received
+            .fetch_add(batch.events.len() as u64, Ordering::Relaxed);
+        if let Some(Delivery::Batch(batch)) = self.enqueue(Delivery::Batch(batch)) {
+            self.deliver_batch(batch);
+        }
+    }
+}
+fn dispatcher(shared: Arc<Shared>, mut incoming: tokio::sync::mpsc::Receiver<Delivery>) {
+    lock(&shared.callbacks).dispatcher = Some(thread::current().id());
+    while let Some(delivery) = incoming.blocking_recv() {
+        if shared.overloaded.load(Ordering::Acquire) || !lock(&shared.callbacks).enabled {
+            shared
+                .discarded
+                .fetch_add(delivery.event_count(), Ordering::Relaxed);
+            while let Ok(delivery) = incoming.try_recv() {
+                shared
+                    .discarded
+                    .fetch_add(delivery.event_count(), Ordering::Relaxed);
+            }
+            break;
+        }
+        match delivery {
+            Delivery::Batch(batch) => shared.deliver_batch(batch),
+            Delivery::State(state, detail) => shared.deliver_state(state, &detail),
+            Delivery::Error(code, retryable, status, message) => {
+                shared.deliver_error(code, retryable, status, &message)
+            }
+        }
+    }
+    if shared.overloaded.swap(false, Ordering::AcqRel) {
+        shared.deliver_error(
+            ResultCode::InvalidState,
+            false,
+            0,
+            "event delivery queue overflow; LIVE connection stopped",
+        );
+        shared.disable();
+    }
+    lock(&shared.callbacks).dispatcher = None;
 }
 struct Signer(Arc<EmbeddedSigner>);
 impl ttl_live_core::SocketSigner for Signer {
@@ -167,6 +302,7 @@ impl ttl_live_core::SocketSigner for Signer {
 }
 struct Control {
     worker: Option<JoinHandle<()>>,
+    dispatcher: Option<JoinHandle<()>>,
     stop: Option<watch::Sender<bool>>,
     stopping: bool,
 }
@@ -188,7 +324,8 @@ impl NativeClient {
         // Disable delivery before signaling stop. Clearing or disconnecting on the
         // callback thread is reentrant and never attempts to join itself.
         self.shared.disable();
-        let worker = {
+        lock(&self.shared.dispatch).sender.take();
+        let (worker, dispatcher) = {
             let mut c = lock(&self.control);
             if let Some(stop) = &c.stop {
                 stop.send_replace(true);
@@ -201,11 +338,15 @@ impl NativeClient {
                 return ResultCode::InvalidState;
             }
             c.stopping = true;
-            c.worker.take()
+            (c.worker.take(), c.dispatcher.take())
         };
         if let Some(w) = worker {
             let _ = w.join();
         }
+        if let Some(w) = dispatcher {
+            let _ = w.join();
+        }
+        lock(&self.shared.stop).take();
         let mut c = lock(&self.control);
         c.stop = None;
         c.stopping = false;
@@ -303,9 +444,17 @@ pub unsafe extern "C" fn ttl_live_client_create(options: *const LiveOptions) -> 
             shared: Arc::new(Shared {
                 callbacks: Mutex::new(Callbacks::default()),
                 idle: Condvar::new(),
+                dispatch: Mutex::new(Dispatch::default()),
+                stop: Mutex::new(None),
+                overloaded: AtomicBool::new(false),
+                received: AtomicU64::new(0),
+                dispatched: AtomicU64::new(0),
+                discarded: AtomicU64::new(0),
+                rejections: AtomicU64::new(0),
             }),
             control: Mutex::new(Control {
                 worker: None,
+                dispatcher: None,
                 stop: None,
                 stopping: false,
             }),
@@ -329,20 +478,45 @@ pub unsafe extern "C" fn ttl_live_client_connect(client: *mut NativeClient) -> R
             return ResultCode::InvalidArgument;
         };
         let mut c = lock(&client.control);
-        if c.stopping || c.worker.as_ref().is_some_and(|w| !w.is_finished()) {
+        if c.stopping
+            || c.worker.as_ref().is_some_and(|w| !w.is_finished())
+            || c.dispatcher.as_ref().is_some_and(|w| !w.is_finished())
+        {
             fail(ResultCode::InvalidState, "client is active or stopping");
             return ResultCode::InvalidState;
         }
         if let Some(w) = c.worker.take() {
             let _ = w.join();
         }
+        if let Some(w) = c.dispatcher.take() {
+            let _ = w.join();
+        }
         let (stop, mut rx) = watch::channel(false);
         let shared = client.shared.clone();
+        *lock(&shared.stop) = Some(stop.clone());
         let inputs = client.inputs.clone();
         let id = client.unique_id.clone();
         let preset = client.preset.clone();
         let retries = client.max_retries;
         lock(&shared.callbacks).enabled = true;
+        let capacity = lock(&shared.dispatch).capacity;
+        if capacity > 0 {
+            let (sender, incoming) = tokio::sync::mpsc::channel(capacity);
+            lock(&shared.dispatch).sender = Some(sender);
+            let dispatch_shared = shared.clone();
+            match thread::Builder::new()
+                .name("ttl-live-dispatch".into())
+                .spawn(move || dispatcher(dispatch_shared, incoming))
+            {
+                Ok(worker) => c.dispatcher = Some(worker),
+                Err(_) => {
+                    lock(&shared.dispatch).sender.take();
+                    lock(&shared.callbacks).enabled = false;
+                    fail(ResultCode::Internal, "could not start callback dispatcher");
+                    return ResultCode::Internal;
+                }
+            }
+        }
         let worker = thread::Builder::new().name("ttl-live-native".into()).spawn(move || {
         lock(&shared.callbacks).worker = Some(thread::current().id());
         let result = catch_unwind(AssertUnwindSafe(|| {
@@ -419,6 +593,10 @@ pub unsafe extern "C" fn ttl_live_client_connect(client: *mut NativeClient) -> R
             }
             Err(_) => {
                 lock(&client.shared.callbacks).enabled = false;
+                lock(&client.shared.dispatch).sender.take();
+                if let Some(worker) = c.dispatcher.take() {
+                    let _ = worker.join();
+                }
                 fail(ResultCode::Internal, "could not start LIVE worker");
                 ResultCode::Internal
             }
@@ -455,6 +633,74 @@ pub unsafe extern "C" fn ttl_live_client_destroy(client: *mut NativeClient) {
         if c.disconnect() == ResultCode::Ok {
             drop(Box::from_raw(client));
         }
+    })
+}
+
+/// Configure only while disconnected; zero retains the legacy callback thread.
+#[no_mangle]
+pub unsafe extern "C" fn ttl_live_client_set_async_delivery(
+    client: *mut NativeClient,
+    capacity: usize,
+) -> ResultCode {
+    super::guard(ResultCode::Internal, || {
+        let Some(client) = client.as_ref() else {
+            fail(ResultCode::InvalidArgument, "NULL client");
+            return ResultCode::InvalidArgument;
+        };
+        if capacity > 256 {
+            fail(
+                ResultCode::InvalidArgument,
+                "delivery capacity exceeds 256 batches",
+            );
+            return ResultCode::InvalidArgument;
+        }
+        let control = lock(&client.control);
+        if control.stopping
+            || control.worker.as_ref().is_some_and(|w| !w.is_finished())
+            || control
+                .dispatcher
+                .as_ref()
+                .is_some_and(|w| !w.is_finished())
+        {
+            fail(
+                ResultCode::InvalidState,
+                "configure delivery while disconnected",
+            );
+            return ResultCode::InvalidState;
+        }
+        lock(&client.shared.dispatch).capacity = capacity;
+        ResultCode::Ok
+    })
+}
+#[repr(C)]
+pub struct DeliveryMetrics {
+    pub queue_depth: usize,
+    pub events_received: u64,
+    pub events_dispatched: u64,
+    pub events_discarded: u64,
+    pub queue_rejections: u64,
+}
+#[no_mangle]
+pub unsafe extern "C" fn ttl_live_client_delivery_metrics(
+    client: *const NativeClient,
+    out: *mut DeliveryMetrics,
+) -> bool {
+    super::guard(false, || {
+        let (Some(client), Some(out)) = (client.as_ref(), out.as_mut()) else {
+            return false;
+        };
+        let dispatch = lock(&client.shared.dispatch);
+        *out = DeliveryMetrics {
+            queue_depth: dispatch
+                .sender
+                .as_ref()
+                .map_or(0, |sender| sender.max_capacity() - sender.capacity()),
+            events_received: client.shared.received.load(Ordering::Relaxed),
+            events_dispatched: client.shared.dispatched.load(Ordering::Relaxed),
+            events_discarded: client.shared.discarded.load(Ordering::Relaxed),
+            queue_rejections: client.shared.rejections.load(Ordering::Relaxed),
+        };
+        true
     })
 }
 
@@ -527,6 +773,15 @@ mod tests {
         let client = &*client;
         let shared = client.shared.clone();
         let (stop, rx) = watch::channel(false);
+        *lock(&shared.stop) = Some(stop.clone());
+        let capacity = lock(&shared.dispatch).capacity;
+        if capacity > 0 {
+            let (sender, incoming) = tokio::sync::mpsc::channel(capacity);
+            lock(&shared.dispatch).sender = Some(sender);
+            let dispatch_shared = shared.clone();
+            lock(&client.control).dispatcher =
+                Some(thread::spawn(move || dispatcher(dispatch_shared, incoming)));
+        }
         let ready = Arc::new(Barrier::new(2));
         let r = ready.clone();
         lock(&shared.callbacks).enabled = true;
@@ -594,6 +849,68 @@ mod tests {
         b.entered.send(()).unwrap();
         lock(&b.resume).recv().unwrap();
     }
+    unsafe extern "C" fn count_overflow(data: *mut std::ffi::c_void, error: *const ErrorInfo) {
+        assert_eq!((*error).code, ResultCode::InvalidState);
+        let message = std::ffi::CStr::from_ptr((*error).message).to_str().unwrap();
+        assert!(message.contains("queue overflow"));
+        (&*(data as *const AtomicUsize)).fetch_add(1, Ordering::SeqCst);
+    }
+    #[test]
+    fn async_slow_callback_has_bounded_queue_and_explicit_terminal_overflow() {
+        unsafe {
+            let client = ttl_live_client_create(&options());
+            assert_eq!(
+                ttl_live_client_set_async_delivery(client, 1),
+                ResultCode::Ok
+            );
+            let (entered, rx) = mpsc::channel();
+            let (resume, r) = mpsc::channel();
+            let blocking = Blocking {
+                entered,
+                resume: Mutex::new(r),
+            };
+            let errors = AtomicUsize::new(0);
+            ttl_live_client_set_event_callback(
+                client,
+                Some(block_event),
+                (&blocking as *const Blocking).cast_mut().cast(),
+            );
+            ttl_live_client_set_error_callback(
+                client,
+                Some(count_overflow),
+                (&errors as *const AtomicUsize).cast_mut().cast(),
+            );
+            start_replay(client);
+            rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let shared = &(*client).shared;
+            while shared.rejections.load(Ordering::Relaxed) == 0 {
+                assert!(Instant::now() < deadline);
+                thread::yield_now();
+            }
+            while !*lock(&(*client).control).stop.as_ref().unwrap().borrow() {
+                assert!(Instant::now() < deadline);
+                thread::yield_now();
+            }
+            resume.send(()).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while errors.load(Ordering::SeqCst) == 0 {
+                assert!(Instant::now() < deadline);
+                thread::yield_now();
+            }
+            assert_eq!(ttl_live_client_disconnect(client), ResultCode::Ok);
+            let shared = &(*client).shared;
+            assert_eq!(
+                shared.received.load(Ordering::Relaxed),
+                shared.dispatched.load(Ordering::Relaxed)
+                    + shared.discarded.load(Ordering::Relaxed)
+            );
+            assert_eq!(errors.load(Ordering::SeqCst), 1);
+            assert!(lock(&shared.dispatch).sender.is_none());
+            ttl_live_client_destroy(client);
+        }
+    }
+
     #[test]
     fn clearing_callback_waits_for_inflight_userdata_then_stops_delivery() {
         unsafe {
@@ -640,26 +957,32 @@ mod tests {
     }
     #[test]
     fn callback_disconnect_is_reentrant_and_destroy_is_refused_on_worker() {
-        unsafe {
-            let client = ttl_live_client_create(&options());
-            assert!(!client.is_null());
-            ttl_live_client_set_event_callback(client, Some(stop_in_callback), client.cast());
-            start_replay(client);
-            // Worker requests cancellation through the production API.
-            let start = Instant::now();
-            loop {
-                if lock(&(*client).control)
-                    .worker
-                    .as_ref()
-                    .unwrap()
-                    .is_finished()
-                {
-                    break;
+        for capacity in [0, 8] {
+            unsafe {
+                let client = ttl_live_client_create(&options());
+                assert!(!client.is_null());
+                assert_eq!(
+                    ttl_live_client_set_async_delivery(client, capacity),
+                    ResultCode::Ok
+                );
+                ttl_live_client_set_event_callback(client, Some(stop_in_callback), client.cast());
+                start_replay(client);
+                // Worker requests cancellation through the production API.
+                let start = Instant::now();
+                loop {
+                    if lock(&(*client).control)
+                        .worker
+                        .as_ref()
+                        .unwrap()
+                        .is_finished()
+                    {
+                        break;
+                    }
+                    assert!(start.elapsed() < Duration::from_secs(1));
+                    thread::yield_now();
                 }
-                assert!(start.elapsed() < Duration::from_secs(1));
-                thread::yield_now();
+                ttl_live_client_destroy(client);
             }
-            ttl_live_client_destroy(client);
         }
     }
     #[test]

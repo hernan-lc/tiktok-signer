@@ -202,3 +202,35 @@ including pinned parity against Node. Node real-bundle tests now execute rather
 than skipping; one network integration test stays intentionally skipped offline.
 Bootstrap compilation is cached once as an immutable vm.Script; each identity
 still runs it in its own mutable context, verified with an offline isolation test.
+
+## Native asynchronous dispatch
+
+`ttl_live_client_set_async_delivery(client, capacity)` is additive; configure
+while disconnected. Zero preserves legacy synchronous callbacks. 1..256 bounds
+queued batch/state/error deliveries on one ordered dispatcher thread. On overflow
+the network worker receives cancellation immediately; queued events are released
+and one terminal error reports overflow after any in-progress callback returns.
+No default silent-drop policy. Ordinary disconnect disables callbacks and clears
+pending delivery; callback-initiated disconnect is a stop request requiring later
+join/destroy outside callbacks. A stopped asynchronous client must disconnect
+before reconnecting. Delivery metrics expose depth, received/dispatched/discarded
+events and rejection counts, including explicitly cancelled pending deliveries.
+New symbols/metrics structs do not alter existing ABI layouts.
+
+Validated: native tests, all-target Clippy, reentrant disconnect in both modes,
+slow callback saturation with exact delivery/discard accounting, C/C++ smoke,
+C AddressSanitizer/UndefinedBehaviorSanitizer smoke, and exported symbol/header
+comparison (100 declarations). Full Rust ThreadSanitizer native lifecycle tests
+passed (six tests); Miri passed ten pure protobuf tests. C smoke instruments the
+C caller, not the Rust implementation. Rust ASan/fuzz/extended soak remain open.
+
+## Allocation tooling
+
+Benchmark-only global allocator instrumentation counts allocation/reallocation
+calls and cumulative requested bytes (not live heap bytes). Libraries do not link
+this allocator. Linux /proc reports process RSS/high-water RSS and thread count.
+Instrumented normalized fixture sample: 39.62 calls and 14,179.77 requested bytes
+per event, RSS/HWM 4,636 KiB, one thread; 54,145 events/s. Native metadata sample:
+831 calls / 106,463 requested bytes per event, RSS/HWM 4,540 KiB, one thread;
+13,292 events/s. Instrumentation adds overhead; do not compare throughput directly
+with uninstrumented samples or infer leaks from allocator-retained RSS.

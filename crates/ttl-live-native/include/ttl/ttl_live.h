@@ -55,5 +55,23 @@ TTL_API ttl_result_t ttl_live_client_set_event_callback(ttl_live_client_t *clien
 TTL_API ttl_result_t ttl_live_client_set_batch_callback(ttl_live_client_t *client, ttl_batch_callback_t callback, void *userdata);
 TTL_API ttl_result_t ttl_live_client_set_state_callback(ttl_live_client_t *client, ttl_state_callback_t callback, void *userdata);
 TTL_API ttl_result_t ttl_live_client_set_error_callback(ttl_live_client_t *client, ttl_error_callback_t callback, void *userdata);
+/* Optional asynchronous callback mode; configure while disconnected.
+ * capacity=0 preserves synchronous callbacks on the LIVE worker. 1..256 bounds
+ * queued deliveries (batches/state/error notifications) on one dispatcher.
+ * All callbacks for a client remain ordered on one thread. Overflow stops the
+ * connection, releases queued events and reports a terminal error on the
+ * dispatcher; no silent event-drop policy. Disconnect discards pending delivery
+ * and waits for in-progress callbacks outside callback-initiated disconnect.
+ * Call disconnect before reconnecting a stopped asynchronous client.
+ */
+TTL_API ttl_result_t ttl_live_client_set_async_delivery(ttl_live_client_t *client, size_t capacity);
+typedef struct ttl_delivery_metrics {
+    size_t queue_depth;
+    uint64_t events_received;
+    uint64_t events_dispatched;
+    uint64_t events_discarded;
+    uint64_t queue_rejections;
+} ttl_delivery_metrics_t;
+TTL_API bool ttl_live_client_delivery_metrics(const ttl_live_client_t *client, ttl_delivery_metrics_t *out);
 TTL_END
 #endif
