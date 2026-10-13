@@ -73,16 +73,32 @@ export interface SignerOptions {
 /// Downloading is what a browser does, and it keeps the library to `npm install` with no manual
 /// step. A cached copy is reused for `maxAgeMs` so a reconnect loop cannot turn into a download
 /// loop; pass `bundlePath` or `bundleSource` to the signer to skip this entirely.
-export async function loadBundle({
+const bundleFlights = new Map<string, Promise<string>>();
+export function loadBundle(options: LoadBundleOptions = {}): Promise<string> {
+  const key = JSON.stringify([
+    options.url ?? BUNDLE_URL,
+    options.cachePath ?? path.join(os.tmpdir(), 'ttl-webmssdk.js'),
+    options.maxAgeMs ?? 24 * 60 * 60 * 1000,
+    options.expectedSha256 ?? (options.url === undefined || options.url === BUNDLE_URL ? BUNDLE_SHA256 : null),
+  ]);
+  const existing = bundleFlights.get(key);
+  if (existing) return existing;
+  if (bundleFlights.size >= 16) return Promise.reject(new Error('signing bundle download capacity exhausted'));
+  const flight = readBundle(options).finally(() => { bundleFlights.delete(key); });
+  bundleFlights.set(key, flight);
+  return flight;
+}
+
+async function readBundle({
   url = BUNDLE_URL,
   cachePath = path.join(os.tmpdir(), 'ttl-webmssdk.js'),
   maxAgeMs = 24 * 60 * 60 * 1000,
   expectedSha256 = url === BUNDLE_URL ? BUNDLE_SHA256 : undefined,
 }: LoadBundleOptions = {}): Promise<string> {
   try {
-    const stat = fs.statSync(cachePath);
+    const stat = await fs.promises.stat(cachePath);
     if (Date.now() - stat.mtimeMs < maxAgeMs && stat.size > 0) {
-      const cached = fs.readFileSync(cachePath, 'utf8');
+      const cached = await fs.promises.readFile(cachePath, 'utf8');
       if (matchesDigest(cached, expectedSha256)) return cached;
     }
   } catch {
@@ -98,12 +114,12 @@ export async function loadBundle({
   }
   const temporary = `${cachePath}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    fs.writeFileSync(temporary, source, { mode: 0o600 });
-    fs.renameSync(temporary, cachePath);
+    await fs.promises.writeFile(temporary, source, { mode: 0o600 });
+    await fs.promises.rename(temporary, cachePath);
   } catch {
     // A read-only temp directory is not a reason to fail a signature.
     try {
-      fs.rmSync(temporary, { force: true });
+      await fs.promises.rm(temporary, { force: true });
     } catch {
       // Nothing was written.
     }
@@ -139,7 +155,7 @@ export class Signer {
   }: SignerOptions = {}): Promise<Signer> {
     const source =
       bundleSource ??
-      (bundlePath ? fs.readFileSync(bundlePath, 'utf8') : await loadBundle({ url: bundleUrl }));
+      (bundlePath ? await fs.promises.readFile(bundlePath, 'utf8') : await loadBundle({ url: bundleUrl }));
 
     const context = vm.createContext({});
     bootstrap().runInContext(context, { timeout: VM_TIMEOUT_MS });

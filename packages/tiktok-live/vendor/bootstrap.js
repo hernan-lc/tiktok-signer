@@ -36,7 +36,10 @@ if (typeof globalThis.setTimeout === 'undefined') {
   globalThis.setTimeout = (callback, delay) => {
     const id = nextId++;
     if (!delay) { try { callback(); } catch (error) { globalThis.__ttlTimerError = String(error); } }
-    else pending.set(id, callback);
+    else {
+      if (pending.size >= 1024) throw new RangeError('embedded timer capacity exceeded');
+      pending.set(id, callback);
+    }
     return id;
   };
   globalThis.setInterval = (callback, delay) => globalThis.setTimeout(() => {}, delay);
@@ -292,8 +295,10 @@ function hostRandomValues(array) {
 
 function createSandbox() {
 const accesses = new Map();
+  let omittedAccesses = 0;
   const record = (path, op, value) => {
     const key = `${path}|${op}`;
+    if (!accesses.has(key) && accesses.size >= 4096) { omittedAccesses++; return; }
     const seen = accesses.get(key) || { path, op, gets: 0, type: typeof value, missing: value === undefined };
     seen.gets++;
     accesses.set(key, seen);
@@ -507,6 +512,7 @@ const accesses = new Map();
   
   
   return { sandbox, windowTarget, accesses,
+    get omittedAccesses() { return omittedAccesses; },
     view, record,
     load(source) {
       try { new Function('__sandbox', `with(__sandbox){ ${source} \n}`)(sandbox); return null; }

@@ -222,7 +222,11 @@ impl<E: Engine + 'static> Signer<E> {
         product: SigningProduct,
         config: SignerConfig,
     ) -> Result<Self, EmbeddedError> {
-        if config.queue_capacity == 0 || config.request_timeout.is_zero() {
+        if config.queue_capacity == 0
+            || config.queue_capacity > tokio::sync::Semaphore::MAX_PERMITS
+            || config.request_timeout.is_zero()
+            || Instant::now().checked_add(config.request_timeout).is_none()
+        {
             return Err(EmbeddedError::Engine(
                 "queue capacity and request timeout must be positive".into(),
             ));
@@ -232,7 +236,7 @@ impl<E: Engine + 'static> Signer<E> {
         let (requests, incoming) = tokio::sync::mpsc::channel::<Request>(config.queue_capacity);
         let counters = Arc::new(Counters::default());
         let worker_counters = counters.clone();
-        let (ready, started) = mpsc::channel::<Result<(), EmbeddedError>>();
+        let (ready, started) = mpsc::sync_channel::<Result<(), EmbeddedError>>(1);
 
         let worker = thread::Builder::new()
             .name(format!("ttl-sign-{}", E::NAME.to_lowercase()))
@@ -283,7 +287,9 @@ impl<E: Engine + 'static> Signer<E> {
                 url: url.to_string(),
                 product,
                 reply,
-                deadline: Instant::now() + self.config.request_timeout,
+                deadline: Instant::now()
+                    .checked_add(self.config.request_timeout)
+                    .ok_or_else(|| DiscoveryError::Signer("invalid signer deadline".into()))?,
             })
             .map_err(|error| match error {
                 tokio::sync::mpsc::error::TrySendError::Full(_) => {
@@ -341,7 +347,7 @@ impl<E: Engine + 'static> UrlSigner for Signer<E> {
 fn worker<E: Engine>(
     bundle: String,
     options: String,
-    ready: mpsc::Sender<Result<(), EmbeddedError>>,
+    ready: mpsc::SyncSender<Result<(), EmbeddedError>>,
     mut incoming: tokio::sync::mpsc::Receiver<Request>,
     counters: Arc<Counters>,
 ) {

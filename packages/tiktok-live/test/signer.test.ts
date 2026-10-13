@@ -113,3 +113,52 @@ test('shared compiled bootstrap preserves mutable context and identity isolation
   assert.match(second, /second.*1/);
   assert.match(a.sign(URL_UNDER_TEST, PRODUCT.ws), /first.*2/);
 });
+
+test('embedded pending timer retention has an explicit capacity and supports cleanup', async () => {
+  const vm = await import('node:vm');
+  const context = vm.createContext({});
+  new vm.Script(fs.readFileSync(BOOTSTRAP_PATH, 'utf8')).runInContext(context);
+  vm.runInContext('for (let i = 0; i < 1024; i++) setTimeout(() => {}, 1000)', context);
+  assert.equal(vm.runInContext('__ttlPendingTimers.size', context), 1024);
+  assert.throws(() => vm.runInContext('setTimeout(() => {}, 1000)', context), /timer capacity exceeded/);
+  vm.runInContext('clearTimeout(1); setTimeout(() => {}, 1000)', context);
+  assert.equal(vm.runInContext('__ttlPendingTimers.size', context), 1024);
+  vm.runInContext('for (const id of __ttlPendingTimers.keys()) clearTimeout(id)', context);
+  assert.equal(vm.runInContext('__ttlPendingTimers.size', context), 0);
+});
+
+test('sandbox access diagnostics are bounded without changing property reads', async () => {
+  const shimPath = path.resolve(HERE, '../../../scripts/headless/shim.mjs');
+  const { createSandbox } = await import(shimPath);
+  const sandbox = createSandbox();
+  for (let i = 0; i < 5000; i++) assert.equal(sandbox.sandbox[`unknown${i}`], undefined);
+  assert.equal(sandbox.accesses.size, 4096);
+  assert.equal(sandbox.omittedAccesses, 904);
+});
+
+test('concurrent bundle loads share a download and release the flight after failure', async () => {
+  const original = globalThis.fetch;
+  let downloads = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  globalThis.fetch = async () => {
+    downloads += 1;
+    await gate;
+    return new Response('test bundle');
+  };
+  const options = { url: 'https://example.invalid/bundle', cachePath: `/missing-dir/ttl-bundle-${process.pid}`, maxAgeMs: 0 };
+  try {
+    const first = loadBundle(options);
+    const second = loadBundle(options);
+    assert.equal(first, second);
+    release();
+    assert.equal(await first, 'test bundle');
+    assert.equal(downloads, 1);
+    globalThis.fetch = async () => { downloads += 1; throw new Error('offline failure'); };
+    await assert.rejects(loadBundle(options), /offline failure/);
+    await assert.rejects(loadBundle(options), /offline failure/);
+    assert.equal(downloads, 3);
+  } finally {
+    globalThis.fetch = original;
+  }
+});

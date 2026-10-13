@@ -174,3 +174,25 @@ async fn queued_requests_time_out_and_are_never_executed() {
     assert_eq!(signer.metrics().worker_failures, 0);
     Arc::try_unwrap(signer).ok().unwrap().shutdown().await;
 }
+
+#[test]
+fn overflowing_configuration_returns_an_error() {
+    for config in [
+        SignerConfig {
+            queue_capacity: usize::MAX,
+            ..SignerConfig::default()
+        },
+        SignerConfig {
+            request_timeout: Duration::MAX,
+            ..SignerConfig::default()
+        },
+    ] {
+        assert!(Signer::<Fake>::with_config(
+            "",
+            Profile::default(),
+            SigningProduct::WsDirect,
+            config
+        )
+        .is_err());
+    }
+}
