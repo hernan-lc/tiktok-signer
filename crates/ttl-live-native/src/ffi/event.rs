@@ -2,11 +2,10 @@ use super::schema::{cardinality, proto_type, static_text};
 use super::*;
 use ttl_live_events::{EventEnvelope, JsonMode, LiveEvent, SchemaField, SchemaValue as V};
 
-#[derive(Clone)]
 pub struct NativeEvent {
     pub envelope: EventEnvelope,
     method: Vec<u8>,
-    root: NativeObject,
+    root: std::sync::OnceLock<NativeObject>,
 }
 #[derive(Clone)]
 pub struct NativeObject {
@@ -19,20 +18,28 @@ pub struct NativeField {
     object: Option<Box<NativeObject>>,
 }
 impl NativeObject {
-    fn new(fields: &[SchemaField], truncated: bool) -> Self {
+    fn new(fields: Vec<SchemaField>, truncated: bool) -> Self {
         Self {
             fields: fields
-                .iter()
-                .map(|f| NativeField {
-                    field: f.clone(),
-                    object: match &f.value {
-                        V::Message(o) => Some(Box::new(Self::new(&o.fields, o.truncated))),
+                .into_iter()
+                .map(|mut field| {
+                    let object = match &mut field.value {
+                        V::Message(o) => Some(Box::new(Self::new(
+                            std::mem::take(&mut o.fields),
+                            o.truncated,
+                        ))),
                         _ => None,
-                    },
+                    };
+                    NativeField { field, object }
                 })
                 .collect(),
             truncated,
         }
+    }
+}
+impl Clone for NativeEvent {
+    fn clone(&self) -> Self {
+        Self::new(self.envelope.clone())
     }
 }
 impl NativeEvent {
@@ -43,7 +50,7 @@ impl NativeEvent {
                 b.push(0);
                 b
             },
-            root: NativeObject::new(&envelope.schema.fields, envelope.schema.truncated),
+            root: std::sync::OnceLock::new(),
             envelope,
         }
     }
@@ -199,7 +206,16 @@ pub unsafe extern "C" fn ttl_event_raw_data(e: *const NativeEvent) -> *const u8 
 
 #[no_mangle]
 pub unsafe extern "C" fn ttl_event_root(e: *const NativeEvent) -> *const NativeObject {
-    super::guard(ptr::null(), || e.as_ref().map_or(ptr::null(), |e| &e.root))
+    super::guard(ptr::null(), || {
+        e.as_ref().map_or(ptr::null(), |e| {
+            e.root.get_or_init(|| {
+                NativeObject::new(
+                    e.envelope.schema.fields.clone(),
+                    e.envelope.schema.truncated,
+                )
+            })
+        })
+    })
 }
 
 #[no_mangle]
@@ -832,4 +848,35 @@ fn map_part(o: Option<&NativeObject>, name: &str, index: usize, number: u32) -> 
     .and_then(|f| f.object.as_deref())
     .and_then(|o| o.fields.iter().rev().find(|f| f.field.number == number))
     .map_or(ptr::null(), |f| f)
+}
+
+#[cfg(test)]
+mod allocation_tests {
+    use super::*;
+    #[test]
+    fn native_tree_is_lazy_and_clone_has_independent_stable_pointers() {
+        let payload = include_bytes!("../../../../fixtures/events/chat.pb");
+        let event = NativeEvent::new(ttl_live_events::decode_event_envelope(
+            "WebcastChatMessage",
+            42,
+            false,
+            payload,
+        ));
+        assert!(event.root.get().is_none());
+        unsafe {
+            assert_eq!(ttl_event_raw_size(&event), payload.len());
+            assert!(event.root.get().is_none());
+            let first = ttl_event_root(&event);
+            assert!(!first.is_null());
+            assert_eq!(first, ttl_event_root(&event));
+            let cloned = event.clone();
+            assert!(cloned.root.get().is_none());
+            let second = ttl_event_root(&cloned);
+            assert_ne!(first, second);
+            assert_eq!(
+                ttl_object_field_count(first),
+                ttl_object_field_count(second)
+            );
+        }
+    }
 }
