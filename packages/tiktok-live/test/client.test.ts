@@ -490,3 +490,37 @@ test('optional reconnect jitter stays within its configured ceiling', async () =
   assert.ok(delay !== undefined && delay >= 10 && delay <= 12);
   assert.equal(live.connected, false);
 });
+
+test('direct async delivery ACKs before callbacks and terminates on queue saturation', async () => {
+  const { create, toBinary } = await import('@bufbuild/protobuf');
+  const { ProtoMessageFetchResultSchema, BaseProtoMessageSchema } = await import('../dist/gen/webcast/shared/message_pb.js');
+  const { WebcastPushFrameSchema } = await import('../dist/gen/webcast/synthetic_proto_pb.js');
+  let sends = 0;
+  class Socket extends LifecycleSocket { override send(): void { sends++; } }
+  const live = new TikTokLive('someone', {
+    roomId: '7300', sessionCookie: 'sessionid=test', fetchGifts: false, fetchRoomInfo: false,
+    signer: { sign: (url) => url }, WebSocketImpl: Socket as unknown as WebSocketConstructor,
+    eventDelivery: { capacity: 1 },
+  });
+  let callbacks = 0;
+  let errors = 0;
+  live.on('event', () => callbacks++);
+  live.on('error', () => errors++);
+  await live.connect();
+  const before = sends;
+  const payload = toBinary(ProtoMessageFetchResultSchema, create(ProtoMessageFetchResultSchema, {
+    needAck: true, internalExt: 'fixture', messages: [0, 1].map(() => create(BaseProtoMessageSchema, {
+      method: 'WebcastFutureMessage', payload: new Uint8Array([8, 1]),
+    })),
+  }));
+  const frame = toBinary(WebcastPushFrameSchema, create(WebcastPushFrameSchema, { payloadType: 'msg', payload }));
+  LifecycleSocket.instances.at(-1)!.dispatch('message', { data: frame });
+  assert.equal(sends, before + 1);
+  assert.equal(live.connected, false);
+  assert.equal(errors, 1);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(callbacks, 0);
+  assert.equal(live.deliveryMetrics().queueDepth, 0);
+  assert.equal(live.deliveryMetrics().discarded, 2);
+  live.disconnect();
+});
