@@ -4,6 +4,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 struct Counting;
 static CALLS: AtomicU64 = AtomicU64::new(0);
 static BYTES: AtomicU64 = AtomicU64::new(0);
+#[cfg(target_os = "linux")]
+static CPU_TICKS: AtomicU64 = AtomicU64::new(0);
+#[cfg(target_os = "linux")]
+fn cpu_ticks() -> Option<u64> {
+    let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
+    let fields: Vec<_> = stat.rsplit_once(')')?.1.split_whitespace().collect();
+    Some(fields.get(11)?.parse::<u64>().ok()? + fields.get(12)?.parse::<u64>().ok()?)
+}
 #[global_allocator]
 static ALLOCATOR: Counting = Counting;
 // SAFETY: layouts, pointers, and allocation semantics are forwarded unchanged to System.
@@ -32,6 +40,8 @@ unsafe impl GlobalAlloc for Counting {
     }
 }
 pub fn reset() {
+    #[cfg(target_os = "linux")]
+    CPU_TICKS.store(cpu_ticks().unwrap_or(0), Ordering::Relaxed);
     CALLS.store(0, Ordering::Relaxed);
     BYTES.store(0, Ordering::Relaxed);
 }
@@ -43,6 +53,27 @@ pub fn report(events: usize) {
         calls as f64 / events as f64,
         bytes as f64 / events as f64
     );
+    #[cfg(target_os = "linux")]
+    if let Some(ticks) = cpu_ticks() {
+        if let Ok(output) = std::process::Command::new("getconf")
+            .arg("CLK_TCK")
+            .output()
+        {
+            if let Ok(rate) = String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .parse::<f64>()
+            {
+                if rate > 0.0 {
+                    let used = ticks.saturating_sub(CPU_TICKS.load(Ordering::Relaxed));
+                    println!(
+                        "process_cpu_ns_per_event={:.2} cpu_tick_resolution_ns={:.0}",
+                        used as f64 * 1e9 / rate / events as f64,
+                        1e9 / rate
+                    );
+                }
+            }
+        }
+    }
     if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
         for line in status.lines().filter(|s| {
             s.starts_with("VmRSS:") || s.starts_with("VmHWM:") || s.starts_with("Threads:")

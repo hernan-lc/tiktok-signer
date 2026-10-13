@@ -14,6 +14,29 @@ import java.time.Duration
 @LooperMode(LooperMode.Mode.PAUSED)
 class MainEventHandoffTest {
     @Test
+    fun offlineHandoffSchedulingBenchmark() {
+        val handler = Handler(Looper.getMainLooper())
+        for (batched in listOf(false, true)) {
+            var delivered = 0
+            val handoff = MainEventHandoff(handler, capacity = 4096,
+                onEvent = { delivered++ }, onState = { _, _ -> }, onOverflow = { fail("overflow") })
+            val samples = LongArray(1000)
+            val started = System.nanoTime()
+            repeat(1000) { index ->
+                val before = System.nanoTime()
+                if (batched) handoff.event("$index") else handler.post { delivered++ }
+                samples[index] = System.nanoTime() - before
+            }
+            val enqueue = System.nanoTime() - started
+            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(1))
+            assertEquals(1000, delivered)
+            samples.sort()
+            println("handoff_batched=$batched events=1000 enqueue_total_ns=$enqueue enqueue_ns_p50=${samples[500]} enqueue_ns_p95=${samples[950]} enqueue_ns_p99=${samples[990]} jvm_used_bytes=${Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()}")
+            handoff.close()
+        }
+    }
+
+    @Test
     fun thousandEventBurstIsOrderedAndDrainedInBatches() {
         val events = mutableListOf<String>()
         val handoff = MainEventHandoff(Handler(Looper.getMainLooper()),
