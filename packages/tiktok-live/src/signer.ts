@@ -41,6 +41,12 @@ export const BUNDLE_SHA256 = 'dee22566273d398e074df6db40f39cfd827f6b8efd6fc382de
 
 const VM_TIMEOUT_MS = 10_000;
 
+// One immutable compiled bootstrap, run against a fresh context for every identity.
+let bootstrapScript: vm.Script | undefined;
+function bootstrap(): vm.Script {
+  return bootstrapScript ??= new vm.Script(fs.readFileSync(BOOTSTRAP_PATH, 'utf8'), { filename: BOOTSTRAP_PATH });
+}
+
 /// Which signature to produce. The socket verifies `ws` and ignores the other two.
 export const PRODUCT = Object.freeze({ fetch: 'fetch', frontier: 'frontier', ws: 'ws' } as const);
 export type Product = (typeof PRODUCT)[keyof typeof PRODUCT];
@@ -136,7 +142,7 @@ export class Signer {
       (bundlePath ? fs.readFileSync(bundlePath, 'utf8') : await loadBundle({ url: bundleUrl }));
 
     const context = vm.createContext({});
-    vm.runInContext(fs.readFileSync(BOOTSTRAP_PATH, 'utf8'), context, { timeout: VM_TIMEOUT_MS });
+    bootstrap().runInContext(context, { timeout: VM_TIMEOUT_MS });
 
     const options: { pinned: boolean; userAgent: string; cookie: string; xmst?: string } = {
       pinned,

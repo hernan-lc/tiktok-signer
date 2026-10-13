@@ -96,3 +96,20 @@ test('the shipped sandbox matches the shim it is generated from', async (t) => {
 function os_tmpdir() {
   return process.env.TMPDIR ?? '/tmp';
 }
+
+test('shared compiled bootstrap preserves mutable context and identity isolation', async () => {
+  const source = `window.byted_acrawler = {
+    init: function() {},
+    registerWsSigner: function() {
+      let calls = 0;
+      return function() { return {'X-Gnarly': document.cookie + '_' + (++calls)}; };
+    }
+  };`;
+  const a = await Signer.create({ bundleSource: source, cookie: 'sessionid=first' });
+  const b = await Signer.create({ bundleSource: source, cookie: 'sessionid=second' });
+  const first = a.sign(URL_UNDER_TEST, PRODUCT.ws);
+  const second = b.sign(URL_UNDER_TEST, PRODUCT.ws);
+  assert.match(first, /first.*1/);
+  assert.match(second, /second.*1/);
+  assert.match(a.sign(URL_UNDER_TEST, PRODUCT.ws), /first.*2/);
+});
