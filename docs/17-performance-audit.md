@@ -103,3 +103,19 @@ Validated: embedded tests and all-target Clippy passed, including queue saturati
 receiver cancellation, timeout-before-execution, worker panic, failed initialization
 and repeated create/drop. Engine fixture tests may skip without their expected
 bundle; QuickJS/V8 real-bundle parity and pool benchmarks remain pending.
+
+## Node transport bounds
+
+Both SDKs share frame helpers. Frames/compressed payloads and decompressed batches
+are limited to 16 MiB. `gunzipSync` uses `maxOutputLength`; top-level protobuf
+preflight rejects >8192 messages before allocating generated message objects.
+Malformed lengths/tags fail explicitly. Unknown compression passthrough remains.
+Validated: `tiktok-live` 53 passed/5 signer skips; `live-sdk` 8 passed.
+
+Offline Node benchmark (`npm run build`, then
+`node packages/tiktok-live/scripts/decode-bench.mjs`): before/after samples
+44,466 / 44,973 events/s; batch p50 0.272 / 0.271 ms, p95 0.414 / 0.400 ms,
+p99 0.566 / 0.562 ms. CPU user/system 2,914,064/27,033 vs 2,903,677/13,045 µs;
+process max RSS 104,356 vs 105,672 KiB. These single-run variations do not
+establish an improvement or leak. Benchmark includes protobuf and normalization,
+not listener dispatch or network ACK. Persistent worker decoding remains unevaluated.
