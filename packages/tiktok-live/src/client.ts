@@ -148,6 +148,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   #connecting: Promise<ClientState> | null = null;
   #closing = false;
   #generation = 0;
+  #connectAbort: AbortController | null = null;
   #listenerErrors = 0;
   readonly #delivery: EventDelivery<LiveEvent>;
   #cancelOpen: (() => void) | null = null;
@@ -195,6 +196,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     this.#closing = false;
     if (this.#reconnectTimer) clearTimeout(this.#reconnectTimer);
     this.#reconnectTimer = null;
+    this.#connectAbort = new AbortController();
     const generation = ++this.#generation;
     const connecting = this.#connect(generation);
     this.#connecting = connecting;
@@ -210,7 +212,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     this.#checkGeneration(generation);
 
     if (!this.roomId) {
-      const lookup = await this.discovery.roomLookup(this.uniqueId);
+      const lookup = await this.discovery.roomLookup(this.uniqueId, this.#connectAbort?.signal);
       this.#checkGeneration(generation);
       if (!lookup.isLive) {
         throw new NotLiveError(`@${this.uniqueId} is not live (status ${lookup.status})`);
@@ -222,12 +224,12 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     // Metadata and the gift table are read once, not per event: the gift list is megabytes, and it
     // is what turns a repeat gift message — which omits its own detail block — into a real value.
     if (this.#options.fetchRoomInfo) {
-      const roomInfo = await this.discovery.roomInfo(this.roomId).catch(() => null);
+      const roomInfo = await this.discovery.roomInfo(this.roomId, this.#connectAbort?.signal).catch(() => null);
       this.#checkGeneration(generation);
       this.roomInfo = roomInfo;
     }
     if (this.#options.fetchGifts) {
-      const gifts = await this.discovery.giftList(this.roomId).catch(() => new Map<string, Gift>());
+      const gifts = await this.discovery.giftList(this.roomId, this.#connectAbort?.signal).catch(() => new Map<string, Gift>());
       this.#checkGeneration(generation);
       this.gifts = gifts;
     }
@@ -299,6 +301,8 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   /// Close the socket and stop reconnecting.
   disconnect(): void {
     this.#closing = true;
+    this.#connectAbort?.abort();
+    this.#connectAbort = null;
     this.#generation += 1;
     this.#delivery.clear();
     this.#connecting = null;

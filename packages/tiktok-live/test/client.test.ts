@@ -452,3 +452,26 @@ test('a signer that disconnects cannot create a socket after cancellation', asyn
   await assert.rejects(live.connect(), /cancelled/);
   assert.equal(sockets, 0);
 });
+
+test('disconnect aborts an in-flight room discovery request', async () => {
+  const original = globalThis.fetch;
+  let signal: AbortSignal | undefined;
+  globalThis.fetch = async (_url, init) => {
+    signal = init?.signal as AbortSignal;
+    return new Promise<Response>((_resolve, reject) => {
+      signal!.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
+    });
+  };
+  const live = new TikTokLive('someone', {
+    sessionCookie: 'sessionid=test', fetchGifts: false, fetchRoomInfo: false,
+    signer: { sign: (url) => url }, WebSocketImpl: LifecycleSocket as unknown as WebSocketConstructor,
+  });
+  try {
+    const connecting = live.connect();
+    for (let i = 0; i < 10 && !signal; i++) await Promise.resolve();
+    assert.ok(signal);
+    live.disconnect();
+    assert.equal(signal.aborted, true);
+    await assert.rejects(connecting, /cancelled/);
+  } finally { live.disconnect(); globalThis.fetch = original; }
+});

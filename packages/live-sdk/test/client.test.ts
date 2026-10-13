@@ -320,3 +320,22 @@ test('throwing lifecycle and error listeners cannot prevent reconnect scheduling
   assert.ok(live.deliveryMetrics().listenerErrors >= 4);
   live.disconnect();
 });
+
+test('disconnect aborts an in-flight broker request', async () => {
+  let signal: AbortSignal | undefined;
+  const live = new TikTokLive('someone', {
+    apiUrl: 'https://example.invalid',
+    fetchImpl: async (_url, init) => {
+      signal = init?.signal as AbortSignal;
+      return new Promise<Response>((_resolve, reject) => {
+        signal!.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
+      });
+    },
+    WebSocketImpl: FakeWebSocket,
+  });
+  const connecting = live.connect();
+  assert.ok(signal);
+  live.disconnect();
+  assert.equal(signal.aborted, true);
+  await assert.rejects(connecting, /cancelled/);
+});

@@ -98,6 +98,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   #connecting: Promise<LiveState> | null = null;
   #closing = false;
   #generation = 0;
+  #connectAbort: AbortController | null = null;
   #listenerErrors = 0;
   readonly #delivery: EventDelivery<LiveEvent>;
   #cancelOpen: (() => void) | null = null;
@@ -141,9 +142,9 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     if (this.connected) return Promise.resolve(this.state());
     if (this.#connecting) return this.#connecting;
     this.#closing = false;
-    this.#closing = false;
     if (this.#reconnectTimer) clearTimeout(this.#reconnectTimer);
     this.#reconnectTimer = null;
+    this.#connectAbort = new AbortController();
     const generation = ++this.#generation;
     const connecting = this.#connectFromApi(generation);
     this.#connecting = connecting;
@@ -164,6 +165,8 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
 
   disconnect(): void {
     this.#closing = true;
+    this.#connectAbort?.abort();
+    this.#connectAbort = null;
     this.#generation += 1;
     this.#delivery.clear();
     this.#connecting = null;
@@ -185,7 +188,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   }
 
   async #connectFromApi(generation: number): Promise<LiveState> {
-    const descriptor = await this.api.connect(this.uniqueId);
+    const descriptor = await this.api.connect(this.uniqueId, this.#connectAbort?.signal);
     this.#checkGeneration(generation);
 
     this.#roomId = descriptor.roomId ?? null;
@@ -212,7 +215,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
         userAgent: descriptor.userAgent,
         timeoutMs: this.api.timeoutMs,
       });
-      const gifts = await discovery.giftList(roomId);
+      const gifts = await discovery.giftList(roomId, this.#connectAbort?.signal);
       this.#checkGeneration(generation);
       this.#gifts = gifts;
     } catch (error) {
