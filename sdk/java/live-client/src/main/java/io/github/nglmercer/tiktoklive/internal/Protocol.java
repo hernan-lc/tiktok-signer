@@ -12,10 +12,12 @@ public final class Protocol {
     private Protocol() {}
 
     public static WebcastPushFrame decode(byte[] bytes) throws IOException {
+        if (bytes.length > 16 * 1024 * 1024) throw new IOException("Frame too large");
         return WebcastPushFrame.parseFrom(bytes);
     }
 
     public static ProtoMessageFetchResult batch(WebcastPushFrame frame) throws IOException {
+        if (frame.getPayload().size() > 16 * 1024 * 1024) throw new IOException("Batch too large");
         byte[] data = frame.getPayload().toByteArray();
         boolean gzip =
                 frame.getHeadersList().stream()
@@ -29,6 +31,14 @@ public final class Protocol {
                 if (data.length > 16 * 1024 * 1024)
                     throw new IOException("Decompressed batch too large");
             }
+        // Bound generated repeated-message allocation even for empty protobuf messages.
+        var input = com.google.protobuf.CodedInputStream.newInstance(data);
+        int count = 0;
+        while (!input.isAtEnd()) {
+            int tag = input.readTag();
+            if (tag == 10 && ++count > 8192) throw new IOException("Batch has too many messages");
+            if (!input.skipField(tag)) throw new IOException("Unexpected protobuf end-group");
+        }
         return ProtoMessageFetchResult.parseFrom(data);
     }
 

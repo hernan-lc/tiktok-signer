@@ -27,6 +27,17 @@ class ProtocolParityTest {
     }
 
     @Test
+    void emptyMessageFloodIsRejectedBeforeGeneratedAllocation() throws Exception {
+        byte[] bytes = new byte[8193 * 2];
+        for (int i = 0; i < bytes.length; i += 2) bytes[i] = 10;
+        var frame = WebcastPushFrame.newBuilder().setPayload(ByteString.copyFrom(bytes)).build();
+        assertThrows(IOException.class, () -> Protocol.batch(frame));
+        var allowed = frame.toBuilder().setPayload(ByteString.copyFrom(bytes, 0, 8192 * 2)).build();
+        assertEquals(8192, Protocol.batch(allowed).getMessagesCount());
+        assertThrows(IOException.class, () -> Protocol.decode(new byte[16 * 1024 * 1024 + 1]));
+    }
+
+    @Test
     void transportOracle() throws Exception {
         var f = JSON.readTree(read("transport-parity.json"));
         var hex = HexFormat.of();
