@@ -399,6 +399,7 @@ impl NativeClient {
         // Disable delivery before signaling stop. Clearing or disconnecting on the
         // callback thread is reentrant and never attempts to join itself.
         self.shared.disable();
+        self.shared.active_connections.store(0, Ordering::Relaxed);
         lock(&self.shared.dispatch).sender.take();
         let (worker, dispatcher) = {
             let mut c = lock(&self.control);
@@ -663,6 +664,7 @@ pub unsafe extern "C" fn ttl_live_client_connect(client: *mut NativeClient) -> R
             });
         }));
         if result.is_err() { shared.error(ResultCode::Internal,false,0,"LIVE worker panicked"); shared.on_state(State::Error,"LIVE worker failed"); }
+        shared.active_connections.store(0, Ordering::Relaxed);
         lock(&shared.callbacks).worker = None;
     });
         match worker {
@@ -974,6 +976,18 @@ mod tests {
             assert!(rendered.contains("websocket_ack_duration_seconds_bucket{le=\"0.001\"} 1"));
             assert!(rendered.contains("live_events_received_total 0"));
             assert!(!rendered.contains("room_id"));
+            ttl_string_free(text);
+            let client_ref = &*client;
+            client_ref
+                .shared
+                .active_connections
+                .store(1, Ordering::Relaxed);
+            assert_eq!(ttl_live_client_disconnect(client), ResultCode::Ok);
+            let text = ttl_live_client_metrics_prometheus(client);
+            assert!(std::ffi::CStr::from_ptr(text)
+                .to_str()
+                .unwrap()
+                .contains("active_live_connections 0"));
             ttl_string_free(text);
             ttl_live_client_destroy(client);
         }

@@ -330,3 +330,20 @@ APK compilation passed again. No Android device is available for execution.
 
 The first Node thirty-minute soak was interrupted before completion; it is not
 an acceptance result. Its restarted run is pending and will be recorded separately.
+
+## Optional worker and retry evaluation
+
+A persistent Node worker with single-flight request/response retention processed
+29,390 events/sec versus 44,755 synchronously for 1000 fixture batches. Batch
+p50/p95/p99 was 0.415/0.596/0.804 ms versus 0.271/0.430/0.511 ms. Process RSS
+with both evaluation contexts alive rose from 131.5 to 171.8 MB; this is not a
+per-worker live-heap estimate. Worker message structured cloning adds measurable
+cost here. Production worker decoding is therefore not introduced. The committed
+tool supports repeating the investigation for a different workload.
+
+Direct Node reconnects now support optional `reconnectJitter` (0..1, default zero).
+Rust `ReconnectingConnection::with_jitter` takes a fraction and caller-provided
+independent sample source; policy layout and deterministic default delays remain
+unchanged. Jitter tests prove the configured ceiling. Broker-backed Node already
+had jitter. Core transport regression tests now explicitly cancel a blocked
+handshake and an idle socket read without delivering stale callbacks.

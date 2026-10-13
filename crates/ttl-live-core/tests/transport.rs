@@ -233,3 +233,57 @@ async fn refused_handshake_is_structured_and_never_retried() {
     server.await.unwrap();
     assert_eq!(*errors.lock().unwrap(), [(Error::Auth(403), false)]);
 }
+
+#[tokio::test]
+async fn cancellation_interrupts_blocked_handshake_and_socket_read() {
+    for handshake in [true, false] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (entered, ready) = tokio::sync::oneshot::channel();
+        let peer = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            if handshake {
+                entered.send(()).unwrap();
+                let _stream = stream;
+                std::future::pending::<()>().await;
+            } else {
+                use futures_util::StreamExt;
+                let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+                ws.next().await.unwrap().unwrap();
+                entered.send(()).unwrap();
+                while ws.next().await.is_some() {}
+            }
+        });
+        let (stop, rx) = watch::channel(false);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink = Sink {
+            metrics: Arc::new(Mutex::new((0, 0))),
+            events: events.clone(),
+            stop: stop.clone(),
+        };
+        let worker = tokio::spawn(async move {
+            ttl_live_core::run(
+                &Signer(format!("ws://{address}/?room_id=1")),
+                &CookieJar::parse("ttwid=test"),
+                &preset(),
+                "1",
+                5,
+                &sink,
+                rx,
+            )
+            .await;
+        });
+        tokio::time::timeout(Duration::from_secs(2), ready)
+            .await
+            .unwrap()
+            .unwrap();
+        stop.send_replace(true);
+        tokio::time::timeout(Duration::from_secs(1), worker)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(events.lock().unwrap().is_empty());
+        peer.abort();
+        let _ = peer.await;
+    }
+}
