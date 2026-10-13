@@ -61,7 +61,7 @@ impl ReconnectPolicy {
     /// Exposed because a policy whose timing cannot be asserted is a policy nobody can review.
     pub fn backoff(&self, attempt: u32) -> Duration {
         if attempt <= 1 {
-            return self.initial_backoff;
+            return self.initial_backoff.min(self.max_backoff);
         }
         let doubled = self
             .initial_backoff
@@ -275,6 +275,18 @@ mod tests {
         assert_eq!(policy.backoff(4), Duration::from_secs(16));
         // Capped, not overflowing, however many attempts a caller allows.
         assert_eq!(policy.backoff(30), Duration::from_secs(16));
+    }
+
+    #[test]
+    fn first_retry_respects_the_configured_ceiling() {
+        let policy = ReconnectPolicy {
+            initial_backoff: Duration::from_secs(60),
+            max_backoff: Duration::from_secs(2),
+            ..ReconnectPolicy::default()
+        };
+        for attempt in [0, 1, 2, 30] {
+            assert_eq!(policy.backoff(attempt), Duration::from_secs(2));
+        }
     }
 
     #[tokio::test]
