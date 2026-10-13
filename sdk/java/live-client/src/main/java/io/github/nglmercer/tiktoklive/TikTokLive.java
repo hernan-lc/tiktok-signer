@@ -56,7 +56,9 @@ public final class TikTokLive implements AutoCloseable {
                                 .build()
                         : b.http;
         api = new ConnectApi(http, b.url, b.key);
-        timers = Executors.newSingleThreadScheduledExecutor(daemon("tiktok-timers"));
+        var timerExecutor = new ScheduledThreadPoolExecutor(1, daemon("tiktok-timers"));
+        timerExecutor.setRemoveOnCancelPolicy(true);
+        timers = timerExecutor;
         events =
                 new ThreadPoolExecutor(
                         1,

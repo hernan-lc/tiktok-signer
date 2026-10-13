@@ -14,7 +14,7 @@ public final class LivePresenceMonitor implements AutoCloseable {
     private final Executor callback;
     private final ExecutorService events;
     private final Duration offline, live, error, maxError;
-    private final int confirmations;
+    private final int confirmations, maxWatches;
     private final Map<String, Watch> watches = new ConcurrentHashMap<>();
     private volatile boolean closed;
     private final java.util.concurrent.atomic.AtomicLong droppedCallbacks =
@@ -24,17 +24,20 @@ public final class LivePresenceMonitor implements AutoCloseable {
         ownClient = b.client == null;
         client = ownClient ? LivePresenceClient.create() : b.client;
         ownScheduler = b.scheduler == null;
-        scheduler =
-                ownScheduler
-                        ? Executors.newSingleThreadScheduledExecutor(
-                                daemon("tiktok-presence-timer"))
-                        : b.scheduler;
+        if (ownScheduler) {
+            var timerExecutor = new ScheduledThreadPoolExecutor(1, daemon("tiktok-presence-timer"));
+            timerExecutor.setRemoveOnCancelPolicy(true);
+            scheduler = timerExecutor;
+        } else {
+            scheduler = b.scheduler;
+        }
         callback = b.callback;
         offline = b.offline;
         live = b.live;
         error = b.error;
         maxError = b.maxError;
         confirmations = b.confirmations;
+        maxWatches = b.maxWatches;
         events =
                 new ThreadPoolExecutor(
                         1,
@@ -65,6 +68,8 @@ public final class LivePresenceMonitor implements AutoCloseable {
     public synchronized Watch watch(String uniqueId) {
         if (closed) throw new IllegalStateException("Monitor closed");
         String id = UniqueId.normalize(uniqueId);
+        if (!watches.containsKey(id) && watches.size() >= maxWatches)
+            throw new RejectedExecutionException("Presence watch capacity exhausted");
         return watches.computeIfAbsent(
                 id,
                 key -> {
@@ -248,7 +253,7 @@ public final class LivePresenceMonitor implements AutoCloseable {
         private PresenceProbe client;
         private ScheduledExecutorService scheduler;
         private Executor callback;
-        private int confirmations = 2;
+        private int confirmations = 2, maxWatches = 1024;
         private Duration offline = Duration.ofSeconds(45),
                 live = Duration.ofSeconds(20),
                 error = Duration.ofSeconds(30),
@@ -266,6 +271,12 @@ public final class LivePresenceMonitor implements AutoCloseable {
 
         public Builder callbackExecutor(Executor executor) {
             callback = Objects.requireNonNull(executor);
+            return this;
+        }
+
+        public Builder maxWatches(int count) {
+            if (count < 1 || count > 65536) throw new IllegalArgumentException("Watch capacity must be 1..65536");
+            maxWatches = count;
             return this;
         }
 

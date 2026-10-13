@@ -16,6 +16,22 @@ import java.util.concurrent.atomic.*;
 
 class PresenceTest {
     @Test
+    void watchCapacityAndCancelledTimersAreReleased() throws Exception {
+        PresenceProbe probe = id -> new CompletableFuture<>();
+        try (var monitor = LivePresenceMonitor.builder().client(probe).maxWatches(1).build()) {
+            var first = monitor.watch("first");
+            assertSame(first, monitor.watch("first"));
+            assertThrows(RejectedExecutionException.class, () -> monitor.watch("second"));
+            first.close();
+            monitor.watch("second").close();
+            var field = LivePresenceMonitor.class.getDeclaredField("scheduler");
+            field.setAccessible(true);
+            var scheduler = (ScheduledThreadPoolExecutor) field.get(monitor);
+            assertEquals(0, scheduler.getQueue().size());
+        }
+    }
+
+    @Test
     void sharedParityCases() throws Exception {
         var cases =
                 new ObjectMapper()

@@ -7,6 +7,20 @@ import org.junit.jupiter.api.Test;
 
 class DeliveryOverloadTest {
     @Test
+    void cancelledTimersReleaseRetainedTasksImmediately() throws Exception {
+        try (var client = TikTokLive.builder("creator").build()) {
+            var field = TikTokLive.class.getDeclaredField("timers");
+            field.setAccessible(true);
+            var scheduler = (ScheduledThreadPoolExecutor) field.get(client);
+            for (int i = 0; i < 1000; i++) {
+                var future = scheduler.schedule(() -> {}, 1, TimeUnit.DAYS);
+                future.cancel(false);
+            }
+            assertEquals(0, scheduler.getQueue().size());
+        }
+    }
+
+    @Test
     void saturationStopsDeliveryAndReportsTerminalError() throws Exception {
         var entered = new CountDownLatch(1);
         var release = new CountDownLatch(1);
