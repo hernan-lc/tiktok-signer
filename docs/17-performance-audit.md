@@ -152,3 +152,23 @@ unhandled error events. ACK precedes application normalization and dispatch.
 Validated: tiktok-live 56 passed/5 signer skips, live-sdk 12 passed; both package
 builds, test compilation and example type checks passed. Bounded asynchronous
 event dispatch remains incomplete.
+
+## Relay lifetime limits
+
+`MAX_ACTIVE_RELAYS` (default 1024) and `MAX_RELAYS_PER_CUSTOMER` (default 32)
+reserve lifetime permits before setup. A permit stays captured through upgrade
+and relay completion, releasing on offline/error/cancellation/close. Customer
+accounting holds only customers with active permits, so its size is globally
+bounded. Capacity rejection uses existing retryable RATE_LIMITED JSON (429).
+`active_live_connections` counts reserved setup plus upgraded relay leases;
+`live_connection_rejections_total` counts global/customer capacity denials. Neither
+metric has identity labels. `RELAY_IDLE_TIMEOUT_SECONDS` defaults to 60 per leg;
+`RELAY_WRITE_TIMEOUT_SECONDS` defaults to 15. Dial uses request timeout, both
+WebSockets cap frames/messages at 16 MiB, and upstream write buffering is bounded.
+No whole-session buffering. A silent leg or stalled write closes the relay.
+
+Validated: API unit/integration tests and all-target Clippy. Tests include
+customer/global bounds, 1000 lease create/drop cycles, error-path permit release,
+and an offline local WebSocket integration proving the permit survives upgrade,
+a second connection gets 429, idle cleanup closes both legs and returns the gauge
+to zero. Slow-reader/writer load, shared observability and broker soak remain open.

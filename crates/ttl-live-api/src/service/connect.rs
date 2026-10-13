@@ -128,6 +128,7 @@ pub struct ConnectService {
     pub(crate) api_keys: ApiKeyStore,
     pub(crate) rate_limiter: RateLimiter,
     pub(crate) metrics: Arc<Metrics>,
+    pub(crate) relay_limits: Arc<crate::limiter::RelayLimits>,
     request_ids: AtomicU64,
 }
 
@@ -149,7 +150,13 @@ impl ConnectService {
         metrics
             .signer_capacity
             .store(config.max_concurrent_signs as u64, Ordering::Relaxed);
+        let relay_limits = crate::limiter::RelayLimits::new(
+            config.max_active_relays,
+            config.max_relays_per_customer,
+            metrics.clone(),
+        );
         Arc::new(Self {
+            relay_limits,
             cache: RoomCache::new(
                 config.room_cache_ttl,
                 config.offline_cache_ttl,

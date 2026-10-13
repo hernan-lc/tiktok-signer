@@ -70,6 +70,8 @@ impl Histogram {
 /// Metrics required to operate and cost-model the short-lived API path.
 #[derive(Debug)]
 pub struct Metrics {
+    pub active_live_connections: AtomicU64,
+    pub live_connection_rejections_total: AtomicU64,
     pub connect_requests_total: AtomicU64,
     pub connect_success_total: AtomicU64,
     pub connect_offline_total: AtomicU64,
@@ -94,6 +96,8 @@ pub struct Metrics {
 impl Default for Metrics {
     fn default() -> Self {
         Self {
+            active_live_connections: AtomicU64::new(0),
+            live_connection_rejections_total: AtomicU64::new(0),
             connect_requests_total: AtomicU64::new(0),
             connect_success_total: AtomicU64::new(0),
             connect_offline_total: AtomicU64::new(0),
@@ -121,6 +125,11 @@ impl Metrics {
     pub fn render(&self) -> String {
         let mut output = String::new();
         for (name, value) in [
+            ("active_live_connections", &self.active_live_connections),
+            (
+                "live_connection_rejections_total",
+                &self.live_connection_rejections_total,
+            ),
             ("connect_requests_total", &self.connect_requests_total),
             ("connect_success_total", &self.connect_success_total),
             ("connect_offline_total", &self.connect_offline_total),

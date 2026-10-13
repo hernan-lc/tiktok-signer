@@ -272,3 +272,122 @@ async fn configured_api_keys_are_enforced_and_retry_after_is_serialized() {
     assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
     assert!(second.headers().get("retry-after").is_some());
 }
+
+#[tokio::test]
+async fn relay_error_paths_release_lifetime_leases() {
+    use std::sync::atomic::Ordering;
+    for service in [offline_service(), live_service()] {
+        for _ in 0..10 {
+            let _ = get(router(service.clone()), "/v1/live?uniqueId=creator").await;
+            assert_eq!(
+                service
+                    .metrics()
+                    .active_live_connections
+                    .load(Ordering::Relaxed),
+                0
+            );
+        }
+    }
+}
+
+struct LocalSigner(String);
+impl ConnectionSigner for LocalSigner {
+    fn sign_room(&self, _: String) -> ServiceFuture<'_, Result<SignedConnection, SignFailure>> {
+        Box::pin(async move {
+            Ok(SignedConnection {
+                url: self.0.clone(),
+                cookies: "ttwid=fixture".into(),
+                user_agent: "fixture-agent".into(),
+            })
+        })
+    }
+    fn ready(&self) -> bool {
+        true
+    }
+    fn identity(&self) -> ClientIdentity {
+        ClientIdentity::new("fixture-agent")
+    }
+}
+
+#[tokio::test]
+async fn active_relay_limit_is_held_until_close_and_idle_cleanup() {
+    use futures_util::StreamExt;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+    let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_url = format!("ws://{}/", upstream.local_addr().unwrap());
+    let upstream_task = tokio::spawn(async move {
+        let (stream, _) = upstream.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        while socket.next().await.is_some() {}
+    });
+    let service = ConnectService::new(
+        Arc::new(Resolver {
+            value: RoomResolution::Live {
+                room_id: "7300".into(),
+                status: 2,
+                nickname: "fixture".into(),
+            },
+        }),
+        Arc::new(LocalSigner(upstream_url)),
+        AppConfig {
+            max_active_relays: 1,
+            relay_idle_timeout: Duration::from_millis(250),
+            connect_requests_per_minute: 1000,
+            ..AppConfig::default()
+        },
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!(
+        "ws://{}/v1/live?uniqueId=creator",
+        listener.local_addr().unwrap()
+    );
+    let app = router(service.clone());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let (mut browser, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    assert_eq!(
+        service
+            .metrics()
+            .active_live_connections
+            .load(Ordering::Relaxed),
+        1
+    );
+    let error = tokio_tungstenite::connect_async(&url).await.unwrap_err();
+    match error {
+        tokio_tungstenite::tungstenite::Error::Http(response) => {
+            assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS)
+        }
+        other => panic!("expected capacity response: {other}"),
+    }
+    // No messages on either leg: idle timeout drops both sockets and the lease.
+    let _ = tokio::time::timeout(Duration::from_secs(2), browser.next())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while service
+            .metrics()
+            .active_live_connections
+            .load(Ordering::Relaxed)
+            != 0
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        service
+            .metrics()
+            .live_connection_rejections_total
+            .load(Ordering::Relaxed),
+        1
+    );
+    tokio::time::timeout(Duration::from_secs(2), upstream_task)
+        .await
+        .unwrap()
+        .unwrap();
+    server.abort();
+    let _ = server.await;
+}
