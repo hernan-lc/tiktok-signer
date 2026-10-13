@@ -13,6 +13,23 @@ class EventsRepositoryTest {
     private fun event(index: Int) = LiveEvent(LiveEvent.Category.LIKE, "user", "User", "$index", 2, 0, at = index.toLong())
 
     @Test
+    fun rapidSessionResetsRetainOnlyTheLatestPublication() = runTest {
+        val repository = EventsRepository(this, 50)
+        repeat(100) {
+            repository.append(event(it))
+            runCurrent()
+            advanceTimeBy(1)
+            repository.beginSession()
+        }
+        repository.append(event(100))
+        runCurrent()
+        advanceTimeBy(50)
+        runCurrent()
+        assertEquals(1L, repository.stats.value.events)
+        assertEquals(listOf("100"), repository.history.value.map { it.text })
+    }
+
+    @Test
     fun burstPublishesOnceAndKeepsEveryStatisticWithBoundedHistory() = runTest {
         val repository = EventsRepository(this, 50)
         repeat(1000) { repository.append(event(it)) }

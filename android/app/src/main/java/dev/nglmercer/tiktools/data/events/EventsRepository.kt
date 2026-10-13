@@ -20,6 +20,7 @@ class EventsRepository(
 ) {
     init { require(updateIntervalMs > 0) }
     private var publication: Job? = null
+    private var publicationGeneration = 0L
     private var totals = LiveStats()
     private var historyDirty = false
 
@@ -31,9 +32,11 @@ class EventsRepository(
     private fun schedulePublication() {
         if (scope == null) { publishLocked(); return }
         if (publication?.isActive == true) return
+        val generation = publicationGeneration
         publication = scope.launch {
             delay(updateIntervalMs)
             synchronized(this@EventsRepository) {
+                if (generation != publicationGeneration) return@synchronized
                 publishLocked()
                 publication = null
             }
@@ -95,6 +98,7 @@ class EventsRepository(
     @Synchronized
     fun beginSession() {
         clearHistory()
+        publicationGeneration++
         publication?.cancel()
         publication = null
         totals = LiveStats()
