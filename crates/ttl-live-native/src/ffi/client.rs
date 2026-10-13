@@ -770,6 +770,9 @@ mod tests {
     /// Simulates worker delivery without discovery/credentials, exercising the
     /// production gate, callbacks, disconnect, clone, serialization and destroy.
     unsafe fn start_replay(client: *mut NativeClient) {
+        start_replay_rate(client, 2000);
+    }
+    unsafe fn start_replay_rate(client: *mut NativeClient, rate: u64) {
         let client = &*client;
         let shared = client.shared.clone();
         let (stop, rx) = watch::channel(false);
@@ -790,7 +793,7 @@ mod tests {
             r.wait();
             while !*rx.borrow() {
                 shared.on_batch(replay());
-                thread::park_timeout(Duration::from_millis(1));
+                thread::park_timeout(Duration::from_micros((2_000_000 / rate).max(1)));
             }
             lock(&shared.callbacks).worker = None;
         });
@@ -985,6 +988,74 @@ mod tests {
             }
         }
     }
+    #[test]
+    #[ignore = "offline 30-minute resource soak; set TTL_SOAK_SECONDS for a shorter smoke"]
+    fn offline_callback_lifecycle_soak() {
+        fn memory(label: &str) {
+            if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+                let lines: Vec<_> = status
+                    .lines()
+                    .filter(|line| {
+                        line.starts_with("VmRSS:")
+                            || line.starts_with("VmHWM:")
+                            || line.starts_with("Threads:")
+                    })
+                    .collect();
+                println!("{label}: {}", lines.join(" "));
+            }
+        }
+        let seconds: u64 = std::env::var("TTL_SOAK_SECONDS").map_or(1800, |v| v.parse().unwrap());
+        assert!((3..=3600).contains(&seconds));
+        memory("baseline");
+        for rate in [1000, 5000, 20000] {
+            let start = Instant::now();
+            let mut cycles: u64 = 0;
+            let mut total = 0;
+            while start.elapsed().as_secs() < seconds / 3 {
+                unsafe {
+                    let client = ttl_live_client_create(&options());
+                    assert!(!client.is_null());
+                    assert_eq!(
+                        ttl_live_client_set_async_delivery(client, 64),
+                        ResultCode::Ok
+                    );
+                    let count = AtomicUsize::new(0);
+                    let overflows = AtomicUsize::new(0);
+                    ttl_live_client_set_event_callback(
+                        client,
+                        Some(count_event),
+                        (&count as *const AtomicUsize).cast_mut().cast(),
+                    );
+                    ttl_live_client_set_error_callback(
+                        client,
+                        Some(count_overflow),
+                        (&overflows as *const AtomicUsize).cast_mut().cast(),
+                    );
+                    start_replay_rate(client, rate);
+                    thread::sleep(Duration::from_secs(1));
+                    assert_eq!(ttl_live_client_disconnect(client), ResultCode::Ok);
+                    let before = count.load(Ordering::SeqCst);
+                    let shared = &(*client).shared;
+                    assert_eq!(
+                        shared.received.load(Ordering::Relaxed),
+                        shared.dispatched.load(Ordering::Relaxed)
+                            + shared.discarded.load(Ordering::Relaxed)
+                    );
+                    ttl_live_client_destroy(client);
+                    assert_eq!(count.load(Ordering::SeqCst), before);
+                    total += before;
+                }
+                cycles += 1;
+                if cycles.is_multiple_of(10) {
+                    memory(&format!(
+                        "rate_target={rate} cycles={cycles} events={total}"
+                    ));
+                }
+            }
+            memory(&format!("cleanup rate_target={rate} cycles={cycles} events={total} actual_events_per_second={:.0}", total as f64 / start.elapsed().as_secs_f64()));
+        }
+    }
+
     #[test]
     fn struct_size_and_bad_bundle_fail_without_network() {
         unsafe {

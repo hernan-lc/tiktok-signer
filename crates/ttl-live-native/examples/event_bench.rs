@@ -7,7 +7,14 @@ use ttl_live::*;
 fn main() {
     let payload = include_bytes!("../../../fixtures/events/chat.pb");
     let schema = std::env::args().nth(1).as_deref() == Some("schema");
-    let iterations = 10_000;
+    let iterations: usize = std::env::args()
+        .nth(2)
+        .map(|value| value.parse().expect("iteration count"))
+        .unwrap_or(10_000);
+    assert!(
+        (100..=1_000_000).contains(&iterations),
+        "iterations must be 100..=1000000"
+    );
     let mut samples = Vec::with_capacity(iterations);
     for i in 0..iterations + 100 {
         if i == 100 {
@@ -42,8 +49,8 @@ fn main() {
     println!(
         "schema={schema} events_per_second={:.0} event_ns_p50={} event_ns_p95={} event_ns_p99={}",
         iterations as f64 / seconds,
-        samples[5000],
-        samples[9500],
-        samples[9900]
+        samples[iterations / 2],
+        samples[iterations * 95 / 100],
+        samples[iterations * 99 / 100]
     );
 }

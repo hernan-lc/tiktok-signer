@@ -12,17 +12,32 @@ fn main() {
         Some("raw") => ttl_live_events::DecodeMode::Raw,
         _ => ttl_live_events::DecodeMode::Full,
     };
-    let iterations = 10_000;
+    let legacy = std::env::args().nth(1).as_deref() == Some("legacy");
+    let decode = || {
+        if legacy {
+            black_box(ttl_live_events::decode_batch(black_box(payload)).unwrap());
+        } else {
+            black_box(ttl_live_events::decode_batch_with_mode(black_box(payload), mode).unwrap());
+        }
+    };
+    let iterations: usize = std::env::args()
+        .nth(2)
+        .map(|value| value.parse().expect("iteration count"))
+        .unwrap_or(10_000);
+    assert!(
+        (100..=1_000_000).contains(&iterations),
+        "iterations must be 100..=1000000"
+    );
     let events = ttl_live_events::decode_batch(payload).unwrap().events.len();
     for _ in 0..100 {
-        black_box(ttl_live_events::decode_batch_with_mode(black_box(payload), mode).unwrap());
+        decode();
     }
     let mut samples = Vec::with_capacity(iterations);
     counting_allocator::reset();
     let start = Instant::now();
     for _ in 0..iterations {
         let before = Instant::now();
-        black_box(ttl_live_events::decode_batch_with_mode(black_box(payload), mode).unwrap());
+        decode();
         samples.push(before.elapsed().as_nanos());
     }
     let elapsed = start.elapsed();

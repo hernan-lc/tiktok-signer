@@ -4,7 +4,8 @@ import { performance } from 'node:perf_hooks';
 import { decodeBatch } from '../dist/frames.js';
 import { decodeEvent } from '../dist/events.js';
 const payload = readFileSync(new URL('../../../fixtures/events/batch.pb', import.meta.url));
-const iterations = 10_000;
+const iterations = Number(process.argv[2] ?? 10_000);
+if (!Number.isInteger(iterations) || iterations < 100 || iterations > 1_000_000) throw new Error('iterations must be 100..=1000000');
 function decode() {
   const batch = decodeBatch(payload);
   for (const message of batch.messages) decodeEvent(message.method, message.payload);
