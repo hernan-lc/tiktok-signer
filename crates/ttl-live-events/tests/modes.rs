@@ -121,3 +121,19 @@ fn every_mode_bounds_oversized_events() {
         }
     }
 }
+
+#[test]
+fn selective_modes_keep_shared_field_budgets() {
+    let payload = [8, 1].repeat(4097);
+    for mode in [
+        DecodeMode::Normalized,
+        DecodeMode::Schema,
+        DecodeMode::Full,
+        DecodeMode::Raw,
+    ] {
+        let decoded = decode_batch_with_mode(&batch("Future", &payload, 1), mode).unwrap();
+        assert!(decoded.events[0].truncated);
+        let decoded = decode_batch_with_mode(&batch("Future", &payload[..8192], 17), mode).unwrap();
+        assert!(decoded.events[16].truncated);
+    }
+}

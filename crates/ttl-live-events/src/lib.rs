@@ -165,7 +165,13 @@ pub fn decode_batch_with_mode(
             } else {
                 None
             };
-            let truncated = oversized || schema.as_ref().is_some_and(|s| s.truncated);
+            let wire_truncated = if schema.is_none() {
+                dynamic::preflight_event(&message.method, &message.payload, &mut budget)
+            } else {
+                false
+            };
+            let truncated =
+                oversized || wire_truncated || schema.as_ref().is_some_and(|s| s.truncated);
             let mut event =
                 if matches!(mode, DecodeMode::Full | DecodeMode::Normalized) && !truncated {
                     normalize_payload(&message.method, &message.payload)

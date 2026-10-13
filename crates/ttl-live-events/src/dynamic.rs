@@ -755,3 +755,71 @@ mod semantic_tests {
         assert!(e.warning);
     }
 }
+
+/// Enforce descriptor field/depth budgets with borrowed wire values, without a schema tree.
+pub(crate) fn preflight_event(method: &str, payload: &[u8], budget: &mut usize) -> bool {
+    fn scan(
+        payload: &[u8],
+        schema: Option<&'static MessageSchema>,
+        depth: usize,
+        left: &mut usize,
+    ) -> bool {
+        use ttl_sign_core::proto::{Reader, WireValue};
+        let mut reader = Reader::new(payload);
+        while let Some(field) = reader.next_field() {
+            if *left == 0 {
+                return true;
+            }
+            let Ok((number, value)) = field else {
+                return true;
+            };
+            if number == 0 || number > 0x1fffffff {
+                return true;
+            }
+            let descriptor = schema.and_then(|s| s.field(number));
+            if let WireValue::Bytes(bytes) = value {
+                if let Some(d) = descriptor.filter(|d| {
+                    d.cardinality == FieldCardinality::Repeated
+                        && matches!(
+                            d.kind,
+                            FieldKind::Varint | FieldKind::Fixed32 | FieldKind::Fixed64
+                        )
+                }) {
+                    let wire = match d.kind {
+                        FieldKind::Varint => 0,
+                        FieldKind::Fixed32 => 5,
+                        _ => 1,
+                    };
+                    let mut cursor = Cursor { bytes, pos: 0 };
+                    while cursor.pos < bytes.len() {
+                        if *left == 0 {
+                            return true;
+                        }
+                        *left -= 1;
+                        if cursor.value(wire).is_err() {
+                            return true;
+                        }
+                    }
+                    continue;
+                }
+                *left -= 1;
+                if let Some(FieldKind::Message(name)) = descriptor.map(|d| d.kind) {
+                    if depth >= MAX_SCHEMA_DEPTH || *left == 0 {
+                        return true;
+                    }
+                    if scan(bytes, schema_by_name(name), depth + 1, left) {
+                        return true;
+                    }
+                }
+            } else {
+                *left -= 1;
+            }
+        }
+        false
+    }
+    let allowance = (*budget).min(MAX_SCHEMA_FIELDS);
+    let mut left = allowance;
+    let truncated = scan(payload, schema_for_method(method), 0, &mut left);
+    *budget -= allowance - left;
+    truncated
+}

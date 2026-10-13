@@ -119,3 +119,36 @@ p99 0.566 / 0.562 ms. CPU user/system 2,914,064/27,033 vs 2,903,677/13,045 µs;
 process max RSS 104,356 vs 105,672 KiB. These single-run variations do not
 establish an improvement or leak. Benchmark includes protobuf and normalization,
 not listener dispatch or network ACK. Persistent worker decoding remains unevaluated.
+
+Selective decoding follow-up: borrowed descriptor preflight now applies the same
+4096 per-event / 65,536 per-batch field and depth-8 limits even when schema trees
+are omitted. Five decoder mode regressions and Clippy passed. This additional
+validation supersedes the earlier normalized timing: 61,214 events/s,
+p50/p95/p99 208,663 / 223,581 / 316,104 ns in the latest shared-host sample.
+
+## Native representation
+
+Native schema trees initialize once on first `ttl_event_root` access, with stable
+pointers until event release. Metadata/raw/JSON access does not materialize them.
+Construction moves child fields instead of cloning whole subtrees at each level.
+Clones own independent envelopes and lazily build independent roots. Opaque C
+handles, exported symbols, borrowed pointer lifetimes and public ABI layouts stay
+unchanged. Native unit/offline tests and all-target Clippy passed.
+
+Offline native event construction/drop benchmark, against origin/main in an
+isolated worktree: metadata-only baseline/after samples 14,728 / 15,027 events/s,
+p50 65,189 / 65,459 ns, p95 89,998 / 72,378 ns, p99 109,477 / 91,490 ns.
+No percentage improvement is inferred from these single-run samples. Callback
+queues, asynchronous dispatch and sanitizer checks remain incomplete.
+
+## Node lifecycle
+
+Connection generations invalidate stale discovery and socket work. Manual and
+automatic connects share single-flight; reconnect timers are owned and cleared.
+Pending handshakes reject on disconnect, and stale close/error/message callbacks
+cannot reset a new connection. Event listener exceptions are routed to optional
+error handlers and do not stop subsequent messages; both SDKs avoid process-fatal
+unhandled error events. ACK precedes application normalization and dispatch.
+Validated: tiktok-live 56 passed/5 signer skips, live-sdk 12 passed; both package
+builds, test compilation and example type checks passed. Bounded asynchronous
+event dispatch remains incomplete.
