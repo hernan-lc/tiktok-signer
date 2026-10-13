@@ -1,3 +1,4 @@
+import { EventDelivery, type DeliveryOptions, type DeliveryMetrics } from "./delivery.js";
 // One class for the whole thing: resolve a room, sign the socket, connect, decode, reconnect.
 //
 // The flow is the web player's, not the old connector's. The player configures its IM SDK with
@@ -73,6 +74,7 @@ class HandshakeRejectedError extends Error {
 }
 
 export interface TikTokLiveOptions {
+  eventDelivery?: DeliveryOptions;
   sessionCookie?: string;
   userAgent?: string;
   roomId?: string;
@@ -146,12 +148,17 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   #connecting: Promise<ClientState> | null = null;
   #closing = false;
   #generation = 0;
+  #listenerErrors = 0;
+  readonly #delivery: EventDelivery<LiveEvent>;
   #cancelOpen: (() => void) | null = null;
   #attempt = 0;
 
   /// `uniqueId` is the `@handle`. Everything else has a working default.
   constructor(uniqueId: string, options: TikTokLiveOptions = {}) {
     super();
+    this.#delivery = new EventDelivery(options.eventDelivery,
+      (event, generation) => this.#dispatch(event, generation),
+      (error) => { this.disconnect(); this.#emitError(error); });
     const cookie = options.sessionCookie ?? cookieHeader(sessionJar());
     this.uniqueId = String(uniqueId).replace(/^@/, '');
     this.roomId = options.roomId ?? '';
@@ -293,6 +300,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   disconnect(): void {
     this.#closing = true;
     this.#generation += 1;
+    this.#delivery.clear();
     this.#connecting = null;
     this.#cancelOpen?.();
     this.#cancelOpen = null;
@@ -329,6 +337,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
       `${config.socketHost}${PATH.wsReuseSupplement}?${query}`,
       PRODUCT.ws,
     );
+    this.#checkGeneration(generation);
 
     const Impl = this.#options.WebSocketImpl;
     if (!Impl) {
@@ -345,6 +354,11 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
           origin: 'https://www.tiktok.com',
         },
       });
+      if (this.#closing || generation !== this.#generation) {
+        try { socket.close(); } catch { /* Already closed. */ }
+        reject(new Error('connection cancelled'));
+        return;
+      }
       socket.binaryType = 'arraybuffer';
       this.#socket = socket;
 
@@ -390,7 +404,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
           resolve();
         }
         this.#cancelOpen = null;
-        this.emit('connected', this.state());
+        this.#notify(() => this.emit('connected', this.state()));
       });
 
       socket.addEventListener('message', (message) => {
@@ -435,7 +449,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
           }
           return;
         }
-        this.emit('disconnected', { code: event.code, reason: String(event.reason ?? '') });
+        this.#notify(() => this.emit('disconnected', { code: event.code, reason: String(event.reason ?? '') }));
         if (!this.#closing) this.#scheduleReconnect();
       });
     });
@@ -487,10 +501,11 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
       event.msgId = message.msgId.toString();
       event.isHistory = message.isHistory;
       if (this.#closing || generation !== this.#generation) break;
-      try {
-        this.emit('event', event);
-        if (!this.#closing && generation === this.#generation) this.#emitTypedEvent(event);
-      } catch (error) { this.#emitError(error); }
+      // Include the backing buffer for unknown events: a small view can retain a whole batch.
+      const metadataBytes = event.method.length * 2 + (event.msgId?.length ?? 0) * 2 + 256;
+      const bytes = event.type === 'unknown' ? event.payload.buffer.byteLength + metadataBytes
+        : message.payload.byteLength * 64 + metadataBytes;
+      this.#delivery.submit(event, generation, bytes);
     }
   }
 
@@ -500,15 +515,11 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     if (event.type !== EVENT.gift) return event;
     const gift = this.gifts.get(event.giftId);
     if (!gift) return event;
-    return {
-      ...event,
-      giftName: event.giftName || gift.name,
-      diamondCount: event.diamondCount || gift.diamondCount,
-      giftIconUrl: gift.iconUrl || undefined,
-      /// Streakable gifts arrive as a burst; only `repeatEnd` is the real total. Anything that
-      /// sums diamonds must ignore the rest, and this is what says which is which.
-      streakable: gift.combo,
-    };
+    event.giftName ||= gift.name;
+    event.diamondCount ||= gift.diamondCount;
+    event.giftIconUrl = gift.iconUrl || undefined;
+    event.streakable = gift.combo;
+    return event;
   }
 
   #startHeartbeat(everyMs: number): void {
@@ -539,8 +550,9 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     }
     this.#attempt += 1;
     const delayMs = Math.min(initialMs * 2 ** (this.#attempt - 1), maxMs);
-    this.emit('reconnecting', { attempt: this.#attempt, delayMs });
     const generation = this.#generation;
+    this.#notify(() => this.emit('reconnecting', { attempt: this.#attempt, delayMs }));
+    if (this.#closing || generation !== this.#generation) return;
     const timer = setTimeout(() => {
       this.#reconnectTimer = null;
       if (this.#closing || generation !== this.#generation) return;
@@ -585,7 +597,25 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   }
 
   #emitError(error: unknown): void {
-    if (this.listenerCount('error') > 0) this.emit('error', toError(error));
+    if (this.listenerCount('error') > 0) {
+      try { this.emit('error', toError(error)); } catch { this.#listenerErrors++; }
+    }
+  }
+
+  deliveryMetrics(): DeliveryMetrics & { listenerErrors: number } {
+    return { ...this.#delivery.metrics(), listenerErrors: this.#listenerErrors };
+  }
+
+  #dispatch(event: LiveEvent, generation: number): boolean {
+    if (this.#closing || generation !== this.#generation) return false;
+    try { this.emit('event', event); } catch (error) { this.#listenerErrors++; this.#emitError(error); }
+    if (!this.#closing && generation === this.#generation) {
+      try { this.#emitTypedEvent(event); } catch (error) { this.#listenerErrors++; this.#emitError(error); }
+    }
+    return true;
+  }
+  #notify(action: () => void): void {
+    try { action(); } catch (error) { this.#listenerErrors++; this.#emitError(error); }
   }
 
   #checkGeneration(generation: number): void {

@@ -279,3 +279,44 @@ test('listener failures preserve subsequent event delivery and ACK progress', as
   assert.equal(live.connected, true);
   live.disconnect();
 });
+
+
+test('bounded asynchronous delivery ACKs immediately and disconnect clears pending events', async () => {
+  FakeWebSocket.instances = [];
+  const live = new TikTokLive('creator', { fetchImpl: async () => liveResponse(), WebSocketImpl,
+    eventDelivery: { capacity: 4, batchSize: 1 } });
+  await live.connect();
+  let events = 0;
+  live.on('event', () => { events++; });
+  const batch = toBinary(ProtoMessageFetchResultSchema, create(ProtoMessageFetchResultSchema, {
+    messages: [1n, 2n].map((msgId) => create(BaseProtoMessageSchema, { method: 'Future', msgId })), needAck: true,
+  }));
+  const frame = toBinary(WebcastPushFrameSchema, create(WebcastPushFrameSchema, { payloadType: 'msg', payload: batch }));
+  const socket = FakeWebSocket.instances[0]!;
+  socket.receive(frame.buffer.slice(frame.byteOffset, frame.byteOffset + frame.byteLength));
+  assert.equal(events, 0);
+  assert.equal(decodePushFrame(socket.sent[1]!).payloadType, 'ack');
+  assert.equal(live.deliveryMetrics().queueDepth, 2);
+  live.disconnect();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(events, 0);
+  assert.equal(live.deliveryMetrics().queueDepth, 0);
+  assert.equal(live.deliveryMetrics().discarded, 2);
+});
+
+test('throwing lifecycle and error listeners cannot prevent reconnect scheduling', async () => {
+  FakeWebSocket.instances = [];
+  const live = new TikTokLive('creator', { fetchImpl: async () => liveResponse(), WebSocketImpl,
+    reconnect: { attempts: 1, initialMs: 1, maxMs: 1 } });
+  live.on('connected', () => { throw new Error('connected listener'); });
+  live.on('disconnected', () => { throw new Error('disconnected listener'); });
+  live.on('reconnecting', () => { throw new Error('reconnecting listener'); });
+  live.on('error', () => { throw new Error('error listener'); });
+  await live.connect();
+  assert.doesNotThrow(() => FakeWebSocket.instances[0]!.dispatch('close', { code: 1006 }));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(FakeWebSocket.instances.length, 2);
+  assert.equal(live.connected, true);
+  assert.ok(live.deliveryMetrics().listenerErrors >= 4);
+  live.disconnect();
+});

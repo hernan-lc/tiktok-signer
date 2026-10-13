@@ -437,3 +437,18 @@ test('duplicate close notifications schedule one reconnect and disconnect clears
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(LifecycleSocket.instances.length, 1);
 });
+
+test('a signer that disconnects cannot create a socket after cancellation', async () => {
+  let sockets = 0;
+  class Socket { constructor() { sockets += 1; } }
+  const live = new TikTokLive('@someone', {
+    roomId: '7300000000000000001',
+    sessionCookie: 'sessionid=test; tt_webid_v2=7999000000000000001',
+    fetchGifts: false,
+    fetchRoomInfo: false,
+    signer: { sign(url) { live.disconnect(); return url; } },
+    WebSocketImpl: Socket as unknown as WebSocketConstructor,
+  });
+  await assert.rejects(live.connect(), /cancelled/);
+  assert.equal(sockets, 0);
+});

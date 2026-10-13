@@ -50,3 +50,5 @@ export type {
   UnknownEvent,
 } from './events.js';
 export type { WebSocketConstructor, WebSocketLike, WebSocketOptions } from './protocol.js';
+
+export type { DeliveryOptions, DeliveryMetrics } from '../../tiktok-live/src/delivery.js';
