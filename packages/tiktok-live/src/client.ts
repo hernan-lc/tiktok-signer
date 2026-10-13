@@ -84,6 +84,8 @@ export interface TikTokLiveOptions {
   identity?: Identity;
   socketHost?: string;
   reconnect?: Partial<ReconnectPolicy>;
+  /** Positive jitter fraction 0..1; zero preserves legacy retry timing. */
+  reconnectJitter?: number;
   signer?: SignerLike;
   bundleSource?: string;
   bundlePath?: string;
@@ -105,6 +107,7 @@ interface ResolvedOptions {
   identity: Identity;
   socketHost: string;
   reconnect: ReconnectPolicy;
+  reconnectJitter: number;
   signer: SignerLike | null;
   bundleSource?: string;
   bundlePath?: string;
@@ -160,6 +163,9 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     this.#delivery = new EventDelivery(options.eventDelivery,
       (event, generation) => this.#dispatch(event, generation),
       (error) => { this.disconnect(); this.#emitError(error); });
+    if (!Number.isFinite(options.reconnectJitter ?? 0) || (options.reconnectJitter ?? 0) < 0 || (options.reconnectJitter ?? 0) > 1) {
+      throw new RangeError('reconnectJitter must be between 0 and 1');
+    }
     const cookie = options.sessionCookie ?? cookieHeader(sessionJar());
     this.uniqueId = String(uniqueId).replace(/^@/, '');
     this.roomId = options.roomId ?? '';
@@ -172,6 +178,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
       identity: options.identity ?? IDENTITY.audience,
       socketHost: options.socketHost ?? SOCKET_HOST.global,
       reconnect: { ...DEFAULT_RECONNECT, ...(options.reconnect ?? {}) },
+      reconnectJitter: options.reconnectJitter ?? 0,
       signer: options.signer ?? null,
       bundleSource: options.bundleSource,
       bundlePath: options.bundlePath,
@@ -553,7 +560,9 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
       return;
     }
     this.#attempt += 1;
-    const delayMs = Math.min(initialMs * 2 ** (this.#attempt - 1), maxMs);
+    const baseMs = Math.min(initialMs * 2 ** Math.min(this.#attempt - 1, 30), maxMs);
+    const delayMs = Math.min(MAX_HEARTBEAT_MS, maxMs,
+      baseMs * (1 + this.#options.reconnectJitter * Math.random()));
     const generation = this.#generation;
     this.#notify(() => this.emit('reconnecting', { attempt: this.#attempt, delayMs }));
     if (this.#closing || generation !== this.#generation) return;

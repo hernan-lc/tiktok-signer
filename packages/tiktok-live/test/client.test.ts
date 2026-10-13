@@ -475,3 +475,18 @@ test('disconnect aborts an in-flight room discovery request', async () => {
     await assert.rejects(connecting, /cancelled/);
   } finally { live.disconnect(); globalThis.fetch = original; }
 });
+
+test('optional reconnect jitter stays within its configured ceiling', async () => {
+  assert.throws(() => new TikTokLive('someone', { reconnectJitter: NaN }), /reconnectJitter/);
+  const live = new TikTokLive('someone', {
+    roomId: '7300', sessionCookie: 'sessionid=test', fetchGifts: false, fetchRoomInfo: false,
+    signer: { sign: (url) => url }, WebSocketImpl: LifecycleSocket as unknown as WebSocketConstructor,
+    reconnect: { initialMs: 10, maxMs: 12, attempts: 2 }, reconnectJitter: 1,
+  });
+  let delay: number | undefined;
+  live.on('reconnecting', (event) => { delay = event.delayMs; live.disconnect(); });
+  await live.connect();
+  LifecycleSocket.instances.at(-1)!.dispatch('close', { code: 1006 });
+  assert.ok(delay !== undefined && delay >= 10 && delay <= 12);
+  assert.equal(live.connected, false);
+});

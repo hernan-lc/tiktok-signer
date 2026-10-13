@@ -69,6 +69,23 @@ impl ReconnectPolicy {
             .unwrap_or(self.max_backoff);
         doubled.min(self.max_backoff)
     }
+    /// Positive bounded jitter; caller supplies independent sample/fraction in 0..1.
+    /// Existing backoff remains deterministic. Invalid fractions/samples become zero.
+    pub fn backoff_with_jitter(&self, attempt: u32, fraction: f64, sample: f64) -> Duration {
+        let fraction = if fraction.is_finite() {
+            fraction.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let sample = if sample.is_finite() {
+            sample.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        Duration::try_from_secs_f64(self.backoff(attempt).as_secs_f64() * (1.0 + fraction * sample))
+            .unwrap_or(self.max_backoff)
+            .min(self.max_backoff)
+    }
 }
 
 /// Why a stream stopped for good.
@@ -103,6 +120,7 @@ pub struct ReconnectingConnection {
     policy: ReconnectPolicy,
     connection: Option<LiveConnection>,
     reconnects: u64,
+    jitter: Option<(f64, Box<dyn Fn() -> f64 + Send + Sync>)>,
 }
 
 impl ReconnectingConnection {
@@ -122,7 +140,18 @@ impl ReconnectingConnection {
             policy,
             connection: Some(connection),
             reconnects: 0,
+            jitter: None,
         })
+    }
+
+    /// Opt into jitter without altering the public policy struct or default behavior.
+    pub fn with_jitter(
+        mut self,
+        fraction: f64,
+        sample: impl Fn() -> f64 + Send + Sync + 'static,
+    ) -> Self {
+        self.jitter = Some((fraction, Box::new(sample)));
+        self
     }
 
     /// How many times the stream has re-established itself. Worth logging: a climbing count with
@@ -178,7 +207,13 @@ impl ReconnectingConnection {
         warn!(room_id = %self.room_id, %cause, "connection lost; reconnecting");
         let mut last = cause;
         for attempt in 1..=self.policy.max_attempts {
-            let delay = self.policy.backoff(attempt);
+            let delay = self.jitter.as_ref().map_or_else(
+                || self.policy.backoff(attempt),
+                |(fraction, sample)| {
+                    self.policy
+                        .backoff_with_jitter(attempt, *fraction, sample())
+                },
+            );
             debug!(room_id = %self.room_id, attempt, ?delay, "waiting before reconnect");
             tokio::time::sleep(delay).await;
 
@@ -289,6 +324,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn jitter_is_bounded_and_preserves_default_backoff() {
+        let policy = ReconnectPolicy::default();
+        assert_eq!(policy.backoff_with_jitter(1, 0.0, 1.0), policy.backoff(1));
+        assert_eq!(
+            policy.backoff_with_jitter(1, 0.5, 1.0),
+            Duration::from_secs(3)
+        );
+        assert_eq!(policy.backoff_with_jitter(30, 1.0, 1.0), policy.max_backoff);
+        assert_eq!(
+            policy.backoff_with_jitter(1, f64::NAN, f64::INFINITY),
+            policy.backoff(1)
+        );
+    }
+
     #[tokio::test]
     async fn a_refusal_is_reported_rather_than_retried() {
         let opened = ReconnectingConnection::open(
@@ -363,6 +413,7 @@ mod tests {
             policy,
             connection: None,
             reconnects: 0,
+            jitter: None,
         };
         let error = stream
             .reconnect(WsError::Closed("test".into()))
