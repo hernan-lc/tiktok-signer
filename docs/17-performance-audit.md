@@ -234,3 +234,99 @@ per event, RSS/HWM 4,636 KiB, one thread; 54,145 events/s. Native metadata sampl
 831 calls / 106,463 requested bytes per event, RSS/HWM 4,540 KiB, one thread;
 13,292 events/s. Instrumentation adds overhead; do not compare throughput directly
 with uninstrumented samples or infer leaks from allocator-retained RSS.
+
+## Additional lifecycle and retained-resource verification
+
+- Mobile signing now has a configurable bounded queue (64 by default), nonblocking submission, 30-second request deadlines, cancelled/expired work skipping, and owned worker shutdown. Host JNI/live tests and Clippy pass with the local pinned bundle.
+- Embedded queue configuration rejects impossible Tokio capacities and overflowing deadlines rather than panicking. Sandbox fake timers are capped at 1024; diagnostic access keys at 4096. QuickJS, V8 and Node signing tests pass after regenerating both bootstrap artifacts.
+- Node bundle downloads use at most 16 concurrent distinct single-flight entries, remove entries on success/failure, and use asynchronous cache filesystem operations. Concurrent download and failed-flight regression tests pass. Identity contexts remain independent.
+- Both Node clients offer ordered asynchronous delivery with explicit count/byte capacity, bounded drain work, one owned immediate timer, and terminal disconnect on overflow. Synchronous delivery remains the default. Byte charges are conservative estimates, not measured heap usage. Generic/typed listener failures and lifecycle/error listener failures are isolated. A reentrant signer cannot open a socket after cancellation.
+- Discovery single-flight entries now have RAII ownership. Cancellation previously retained entries indefinitely; the failing offline reproduction is replaced by a passing cancellation/resource-release test. Entries also have an explicit configured bound.
+- Android defaults: at most 1024 handoff notices / 8 MiB estimated UTF-16 retention, 64 per main-thread drain, 16 ms interval. Saturation ends the session with an explicit error; business SharedFlow saturation also ends the session. Disconnect removes pending main work and joins asynchronous native cleanup. JVM tests cover 1000-event ordering, count/byte saturation, callback failure and stalled business consumers.
+- All four Android JNI ABI builds completed. Updated-native debug/release assembly, JVM tests, lint and instrumentation APK compilation passed. Device instrumentation execution remains incomplete: `adb devices` has no connected device or emulator.
+- Java's existing 1024-task callback queue silently discarded rejected business events. Saturation now invalidates the connection, cancels pending transport work, clears retained tasks and delivers a terminal overload error after the active callback. Offline saturation regression and live-client tests pass.
+
+Thirty-minute QuickJS signing and native callback lifecycle soaks are running; their results are not yet verified or acceptance claims.
+
+## Repeated final decoder comparison
+
+Three alternating runs pinned to the same allowed CPU, 10,000 batches/run, 13
+events/batch. Both binaries use the same benchmark-only allocator instrumentation.
+The baseline binary was built from an isolated worktree at `886157c`. Reported
+latency columns are medians of the three runs' batch percentiles, not pooled
+percentiles. Shared-host timings remain workload-specific observations.
+
+| Path | Events/sec | Batch p50/p95/p99 ns | Allocation calls/event | Requested bytes/event |
+| --- | ---: | --- | ---: | ---: |
+| Baseline default | 38,572 | 326,416 / 421,283 / 503,925 | 152.92 | 36,417.54 |
+| Current default | 38,314 | 329,186 / 417,012 / 520,703 | 152.92 | 36,417.54 |
+| Selected full | 38,384 | 325,350 / 432,893 / 497,083 | 150.92 | 34,486.77 |
+| Selected normalized | 66,167 | 185,589 / 274,733 / 309,921 | 39.62 | 14,195.77 |
+| Selected schema | 48,521 | 258,224 / 331,642 / 378,688 | 116.15 | 24,610.92 |
+| Selected raw | 96,304 | 125,643 / 190,819 / 208,615 | 5.38 | 4,495.77 |
+
+Default-path throughput stayed within observed run variation. These results
+support offering selective modes rather than changing the default serialization.
+Requested bytes count cumulative allocation/reallocation traffic, not live heap.
+
+Native metadata benchmark, 10,000 events, same instrumented fixture: baseline
+14,827 events/sec, 831 calls/event, 106,463 requested bytes/event, p50/p95/p99
+66,383/72,791/91,980 ns; current 22,193 events/sec, 284 calls/event, 51,221
+requested bytes/event, 38,385/59,732/69,918 ns. Current schema-access path: 20,644
+events/sec, 529 calls/event, 82,371 requested bytes/event. These are single runs.
+
+Signer evaluation (warm independent contexts, bounded synthetic concurrency,
+local verified bundle): QuickJS one context/concurrency 100 processed 200
+requests at 19.13 requests/sec; two at 31.58, with warm RSS about 8.0/12.8 MiB.
+V8 one context/concurrency 100 processed 1000 at 389.92 requests/sec; two at
+743.94, with warm RSS 44.0/58.0 MiB. V8 process-global background threads and
+allocator memory remain after isolate disposal; worker/isolate disposal does not
+promise process-global V8 teardown. The library keeps one worker by default.
+The benchmark supports separate contexts to evaluate deployment tradeoffs;
+production pool scheduling is not added without representative workload evidence.
+
+Additional checks passed: full Node generated-protobuf/schema checks, typechecks
+and tests after `npm ci`; broker SDK typecheck/tests after `npm ci`; Rust 1.88
+workspace tests; full Rust-instrumented native AddressSanitizer unit/offline tests;
+30-second fuzz smoke for full event envelopes and native decoding, plus a separate
+30-second event fuzz run exercising all selective modes. A Node offline lifecycle
+soak tool smoke-tested 1000/5000/20000 event/sec targets with zero errors and zero
+active sockets after cleanup. Its thirty-minute run is pending.
+
+## Completed thirty-minute Rust soaks and transport measurements
+
+QuickJS: 1800 seconds, 17,963 successful signatures. Baseline RSS 3748 KiB,
+peak 10,528 KiB, late-run RSS approximately 6720 KiB, after async shutdown
+7044 KiB. Queue depth sampled at zero. One signer worker existed during signing;
+post-shutdown process threads include Tokio's blocking join helper. No signing
+errors or retained queue growth were observed. RSS after cleanup is not proof
+of live JS objects: the allocator can retain freed pages.
+
+Native callbacks: 1802.19 seconds across independent ten-minute target rates.
+Baseline RSS 5196 KiB, peak 7844 KiB, cleanup RSS 5152/5112/5168 KiB.
+595/594/597 create/disconnect/destroy cycles delivered/accounted 500,378 /
+1,578,494 / 4,343,391 events. Actual rates were 833 / 2627 / 7233 events/sec,
+not the requested targets of 1000 / 5000 / 20000. Each cycle checked no callbacks
+after disconnect/destroy and exact received/dispatched/discarded accounting.
+These replay results exercise cloned/serialized native events and callback
+ownership, not real network traffic. They do not claim every platform sustains
+all target rates.
+
+Loopback transport, 1000 batches, shared synthetic/captured batch fixture:
+plain baseline/current ACK roundtrip p50/p95/p99 26,261/29,403/36,057 ns versus
+26,370/29,924/63,070 ns; gzip baseline/current 46,644/52,685/89,440 ns versus
+47,179/52,866/58,237 ns. These are single runs. Plain allocation traffic including
+the loopback peer was 154,647.94 versus 129,018.81 requested bytes/batch.
+Gzip current median roundtrip remains below 50 microseconds for this fixture;
+this does not justify adding executor offload/worker scheduling overhead to the
+small-frame path. Large payload bounds remain mandatory.
+
+Final Rust-native ThreadSanitizer passed seven tests (the long soak is explicitly
+ignored under the sanitizer run). Actual JVM/JNI repeated create/sign/close and
+concurrent sign/close tests passed with the verified local bundle, then passed
+with an offline synthetic bundle for CI. All four Android ABIs were rebuilt
+and updated-native debug/release assembly, JVM tests, lint and instrumentation
+APK compilation passed again. No Android device is available for execution.
+
+The first Node thirty-minute soak was interrupted before completion; it is not
+an acceptance result. Its restarted run is pending and will be recorded separately.

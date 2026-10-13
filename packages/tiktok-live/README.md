@@ -117,3 +117,22 @@ types, which form the stable listener-facing API.
 ## Authorized use only
 
 This opens real connections to public rooms and is subject to TikTok's terms.
+
+### Resource limits and optional asynchronous delivery
+
+Existing synchronous event delivery remains the default. Set
+`eventDelivery: { capacity: 1024, maxBytes: 64 * 1024 * 1024 }` to use one bounded,
+ordered asynchronous FIFO. Overflow disconnects and reports an error; disconnect
+clears queued events. ACKs precede delivery. `deliveryMetrics()` reports retained
+queue charge, delivery/discard/rejection counts and listener failures. Byte charges
+are conservative estimates, not heap measurements. Listener exceptions cannot
+prevent transport cleanup or typed delivery to other listeners.
+
+Frames/batches are limited to 16 MiB and 8192 messages. Bundle downloads are limited
+to 8 MiB, retain hash verification and share at most 16 concurrent distinct loads.
+Room/gift HTTP response bodies are limited to 16 MiB. Pending discovery requests
+are aborted on disconnect. Run `node scripts/decode-bench.mjs` after building for an
+offline decode benchmark, or `node scripts/lifecycle-soak.mjs 1800` for independent
+1000/5000/20000-event/sec targets and repeated connection cleanup. These synthetic
+tools do not contact TikTok. See [configuration](../../docs/18-live-resource-configuration.md)
+and [measurements](../../docs/17-performance-audit.md).

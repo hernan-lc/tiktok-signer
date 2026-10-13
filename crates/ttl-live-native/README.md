@@ -192,3 +192,21 @@ additional permissions. Artifact packages retain the workspace license plus
 `protobuf-license/LICENSE.upstream`, upstream provenance, and the existing
 protobuf crate's licensing explanation. Refer to those original terms when
 redistributing; the complete binary is not labelled solely as MIT.
+
+### Bounded asynchronous delivery and metrics
+
+Callbacks remain synchronous by default. Before connecting, call
+`ttl_live_client_set_async_delivery(client, capacity)` with 1–256 queued deliveries
+to use one ordered dispatcher. Capacity 0 restores synchronous mode. A delivery
+is a bounded batch, state transition, or error. Queue overflow stops reception,
+releases queued deliveries and reports a terminal error after the active callback;
+it does not continue silently losing gifts. Keep callbacks finite so disconnect
+can join them. Destroy the client after returning from its callbacks.
+
+`ttl_live_client_delivery_metrics` returns delivery counters and queue depth.
+`ttl_live_client_metrics_prometheus` returns owned label-free event/queue counters,
+active connection/reconnect counters and ACK/decode/callback duration histograms.
+Release its returned string with `ttl_string_free`. Counts are concurrent snapshots;
+received = dispatched + discarded is asserted after shutdown, rather than during
+an active drain. See [resource configuration](../../docs/18-live-resource-configuration.md)
+and [benchmarks/verification](../../docs/17-performance-audit.md).
