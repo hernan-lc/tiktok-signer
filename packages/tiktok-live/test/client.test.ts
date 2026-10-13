@@ -524,3 +524,61 @@ test('direct async delivery ACKs before callbacks and terminates on queue satura
   assert.equal(live.deliveryMetrics().discarded, 2);
   live.disconnect();
 });
+
+test('cancelled signer initialization cannot replace a newer retained context', async () => {
+  const { Signer } = await import('../dist/signer.js');
+  const original = Signer.create;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let preparations = 0;
+  const urls: string[] = [];
+  class Socket extends LifecycleSocket { constructor(url: string) { super(); urls.push(url); } }
+  Signer.create = async () => {
+    const context = ++preparations;
+    if (context === 1) await gate;
+    return { sign: (url: string) => `${url}&context=${context}` } as unknown as import('../dist/signer.js').Signer;
+  };
+  const live = new TikTokLive('someone', {
+    roomId: '7300', sessionCookie: 'sessionid=test', fetchGifts: false, fetchRoomInfo: false,
+    WebSocketImpl: Socket as unknown as WebSocketConstructor,
+  });
+  try {
+    const first = live.connect();
+    const rejected = assert.rejects(first, /cancelled/);
+    for (let i = 0; i < 10 && preparations === 0; i++) await Promise.resolve();
+    assert.equal(preparations, 1);
+    live.disconnect();
+    await live.connect();
+    release();
+    await rejected;
+    live.disconnect();
+    await live.connect();
+    assert.equal(preparations, 2);
+    assert.equal(urls.length, 2);
+    assert.ok(urls.every((url) => url.endsWith('&context=2')));
+  } finally { release(); live.disconnect(); Signer.create = original; }
+});
+
+test('disconnect aborts guest identity bootstrap before it can create a socket', async () => {
+  const original = globalThis.fetch;
+  let signal: AbortSignal | undefined;
+  globalThis.fetch = async (_url, init) => {
+    signal = init?.signal as AbortSignal;
+    return new Promise<Response>((_resolve, reject) => {
+      signal!.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
+    });
+  };
+  const live = new TikTokLive('someone', {
+    roomId: '7300', sessionCookie: '', fetchGifts: false, fetchRoomInfo: false,
+    signer: { sign: (url) => url }, WebSocketImpl: LifecycleSocket as unknown as WebSocketConstructor,
+  });
+  try {
+    const first = live.connect();
+    const rejected = assert.rejects(first);
+    assert.ok(signal);
+    live.disconnect();
+    assert.equal(signal.aborted, true);
+    await rejected;
+    assert.equal(live.connected, false);
+  } finally { live.disconnect(); globalThis.fetch = original; }
+});

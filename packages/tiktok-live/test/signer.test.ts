@@ -162,3 +162,22 @@ test('concurrent bundle loads share a download and release the flight after fail
     globalThis.fetch = original;
   }
 });
+
+test('a blocked bundle download has a deadline and releases its single-flight entry', async () => {
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async (_url, init) => {
+    calls++;
+    const signal = init?.signal;
+    return new Promise<Response>((_resolve, reject) => {
+      signal!.addEventListener('abort', () => reject(signal!.reason), { once: true });
+    });
+  };
+  const keepAlive = setTimeout(() => {}, 1000);
+  try {
+    const options = { url: 'https://example.invalid/blocked', cachePath: '/missing-dir/blocked.js', timeoutMs: 5 };
+    await assert.rejects(loadBundle(options), /timeout/i);
+    await assert.rejects(loadBundle(options), /timeout/i);
+    assert.equal(calls, 2);
+  } finally { clearTimeout(keepAlive); globalThis.fetch = original; }
+});

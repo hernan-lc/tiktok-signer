@@ -59,6 +59,7 @@ export interface SessionIdentity {
 }
 
 export interface GuestSessionOptions {
+  signal?: AbortSignal;
   userAgent?: string;
   url?: string;
   timeoutMs?: number;
@@ -112,12 +113,14 @@ export async function bootstrapGuestSession({
   timeoutMs = 15_000,
   retries: requestedRetries = DEFAULT_GUEST_RETRIES,
   retryDelayMs: requestedRetryDelayMs = DEFAULT_GUEST_RETRY_DELAY_MS,
+  signal,
 }: GuestSessionOptions = {}): Promise<SessionIdentity> {
   const retries = boundedRetries(requestedRetries);
   const retryDelayMs = boundedRetryDelay(requestedRetryDelayMs);
   let lastNoCookies: GuestSessionError | null = null;
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
+    signal?.throwIfAborted();
     let response: Response;
     try {
       response = await fetch(url, {
@@ -125,7 +128,7 @@ export async function bootstrapGuestSession({
           'user-agent': userAgent,
           'accept-language': 'en-US,en;q=0.9',
         },
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
       });
     } catch {
       throw new GuestSessionError(
@@ -173,7 +176,7 @@ export async function bootstrapGuestSession({
       response.status,
     );
     if (attempt < retries) {
-      await delay(Math.min(MAX_GUEST_RETRY_DELAY_MS, retryDelayMs * 2 ** attempt));
+      await delay(Math.min(MAX_GUEST_RETRY_DELAY_MS, retryDelayMs * 2 ** attempt), signal);
     }
   }
 
@@ -193,8 +196,13 @@ function boundedRetryDelay(value: number): number {
   return Math.min(MAX_GUEST_RETRY_DELAY_MS, Math.max(0, Math.floor(value)));
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    signal?.throwIfAborted();
+    const aborted = () => { clearTimeout(timer); reject(signal?.reason); };
+    const timer = setTimeout(() => { signal?.removeEventListener('abort', aborted); resolve(); }, ms);
+    signal?.addEventListener('abort', aborted, { once: true });
+  });
 }
 
 /// A `Cookie` header from a jar, optionally with extra pairs appended.

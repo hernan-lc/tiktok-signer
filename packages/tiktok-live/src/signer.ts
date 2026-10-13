@@ -53,6 +53,7 @@ export const PRODUCT = Object.freeze({ fetch: 'fetch', frontier: 'frontier', ws:
 export type Product = (typeof PRODUCT)[keyof typeof PRODUCT];
 
 export interface LoadBundleOptions {
+  timeoutMs?: number;
   url?: string;
   cachePath?: string;
   maxAgeMs?: number;
@@ -80,6 +81,7 @@ export function loadBundle(options: LoadBundleOptions = {}): Promise<string> {
     options.url ?? BUNDLE_URL,
     options.cachePath ?? path.join(os.tmpdir(), 'ttl-webmssdk.js'),
     options.maxAgeMs ?? 24 * 60 * 60 * 1000,
+    options.timeoutMs ?? 30_000,
     options.expectedSha256 ?? (options.url === undefined || options.url === BUNDLE_URL ? BUNDLE_SHA256 : null),
   ]);
   const existing = bundleFlights.get(key);
@@ -91,6 +93,7 @@ export function loadBundle(options: LoadBundleOptions = {}): Promise<string> {
 }
 
 async function readBundle({
+  timeoutMs = 30_000,
   url = BUNDLE_URL,
   cachePath = path.join(os.tmpdir(), 'ttl-webmssdk.js'),
   maxAgeMs = 24 * 60 * 60 * 1000,
@@ -105,7 +108,7 @@ async function readBundle({
   } catch {
     // No cache yet.
   }
-  const response = await fetch(url);
+  const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
   if (!response.ok) {
     throw new Error(`could not download the signing bundle: HTTP ${response.status} from ${url}`);
   }

@@ -215,7 +215,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
 
   async #connect(generation: number): Promise<ClientState> {
 
-    await this.#ensureSession();
+    await this.#ensureSession(generation);
     this.#checkGeneration(generation);
 
     if (!this.roomId) {
@@ -241,7 +241,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
       this.gifts = gifts;
     }
 
-    await this.#ensureSigner();
+    await this.#ensureSigner(generation);
 
     this.#checkGeneration(generation);
     await this.#open(generation);
@@ -251,29 +251,31 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   /// Use a supplied/stored jar, or create one anonymous TikTok guest identity for this client.
   /// The promise prevents concurrent callers from bootstrapping two identities and keeps the
   /// in-memory jar stable across reconnects.
-  async #ensureSession(): Promise<void> {
+  async #ensureSession(generation: number): Promise<void> {
     if (this.#options.cookie) {
       this.discovery.setCookie(this.#options.cookie);
       return;
     }
     if (!this.#guestSession) {
       this.#guestMode = true;
-      this.#guestSession = bootstrapGuestSession({ userAgent: this.#options.userAgent })
+      const pending = bootstrapGuestSession({ userAgent: this.#options.userAgent, signal: this.#connectAbort?.signal })
         .then((identity) => {
+          this.#checkGeneration(generation);
           this.#options.cookie = identity.cookie;
           this.discovery.setCookie(identity.cookie);
         })
         .catch((error) => {
-          this.#guestSession = null;
+          if (this.#guestSession === pending) this.#guestSession = null;
           throw error;
         });
+      this.#guestSession = pending;
     }
     await this.#guestSession;
   }
 
-  async #ensureSigner(): Promise<void> {
+  async #ensureSigner(generation: number): Promise<void> {
     if (this.#signer) return;
-    this.#signer =
+    const signer =
       this.#options.signer ??
       (await Signer.create({
         bundleSource: this.#options.bundleSource,
@@ -282,16 +284,18 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
         userAgent: this.#options.userAgent,
         cookie: this.#options.cookie,
       }));
+    this.#checkGeneration(generation);
+    this.#signer = signer;
   }
 
   /// A guest identity can expire while a long-lived socket is down. Replace the whole identity,
   /// including the signer context, once; a deterministic refusal after that is terminal.
-  async #refreshGuestSession(): Promise<void> {
+  async #refreshGuestSession(generation: number): Promise<void> {
     this.#guestSession = null;
     this.#options.cookie = '';
     this.#signer = null;
-    await this.#ensureSession();
-    await this.#ensureSigner();
+    await this.#ensureSession(generation);
+    await this.#ensureSigner(generation);
   }
 
   /// Room, viewers, and whether the socket is up.
@@ -310,6 +314,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     this.#closing = true;
     this.#connectAbort?.abort();
     this.#connectAbort = null;
+    this.#guestSession = null;
     this.#generation += 1;
     this.#delivery.clear();
     this.#connecting = null;
@@ -597,7 +602,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
       if (this.#guestMode && !this.#guestRefreshAttempted && !this.#closing) {
         this.#guestRefreshAttempted = true;
         try {
-          await this.#refreshGuestSession();
+          await this.#refreshGuestSession(generation);
           if (!this.#closing && generation === this.#generation) await this.connect();
         } catch (refreshError) {
           if (!this.#closing) this.#emitError(refreshError);
