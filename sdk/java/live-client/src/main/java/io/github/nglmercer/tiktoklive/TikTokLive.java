@@ -34,7 +34,7 @@ public final class TikTokLive implements AutoCloseable {
             new java.util.concurrent.atomic.AtomicLong();
     private int retries;
     private boolean active;
-    private volatile boolean closed;
+    private volatile boolean closed, deliveryStopped;
     private volatile LiveState state;
 
     private TikTokLive(Builder b) {
@@ -97,6 +97,7 @@ public final class TikTokLive implements AutoCloseable {
             return pending != null && !pending.isDone()
                     ? pending
                     : CompletableFuture.completedFuture(state);
+        deliveryStopped = false;
         active = true;
         retries = 0;
         long token = ++generation;
@@ -393,12 +394,12 @@ public final class TikTokLive implements AutoCloseable {
         return this;
     }
 
-    private void emit(String name, Object value) {
-        if (closed) return;
+    private synchronized void emit(String name, Object value) {
+        if (closed || deliveryStopped) return;
         try {
             events.execute(
                     () -> {
-                        if (closed) return;
+                        if (closed || deliveryStopped) return;
                         for (var listener :
                                 listeners.getOrDefault(name, new CopyOnWriteArrayList<>())) {
                             Runnable invocation =
@@ -419,9 +420,27 @@ public final class TikTokLive implements AutoCloseable {
                         }
                     });
         } catch (RejectedExecutionException overflow) {
-            droppedCallbacks.incrementAndGet();
-            // Bound retained events when a consumer stalls. Protocol acknowledgements continue.
-            // Applications needing lossless delivery must keep callbacks short and forward work.
+            synchronized (this) {
+                if (closed || deliveryStopped) return;
+                deliveryStopped = true;
+                droppedCallbacks.addAndGet(1L + events.getQueue().size());
+                events.getQueue().clear();
+                active = false;
+                ++generation;
+                stopSocket();
+                api.cancelPending();
+                gifts = Map.of();
+                streaks.clear();
+                if (pending != null && !pending.isDone()) pending.cancel(false);
+                state = new LiveState(uniqueId, state.roomId(), state.status(), false);
+                events.execute(() -> {
+                    if (closed) return;
+                    var failure = new IllegalStateException("Event delivery overloaded; connection stopped");
+                    for (var listener : listeners.getOrDefault("error", new CopyOnWriteArrayList<>())) {
+                        try { listener.accept(failure); } catch (Throwable ignored) { /* Terminal notification. */ }
+                    }
+                });
+            }
         }
     }
 
