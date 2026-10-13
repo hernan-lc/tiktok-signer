@@ -1,4 +1,6 @@
 //! Offline benchmark: cargo run --release -p ttl-live-events --example decode_bench.
+#[path = "../../../scripts/bench/counting_allocator.rs"]
+mod counting_allocator;
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -16,6 +18,7 @@ fn main() {
         black_box(ttl_live_events::decode_batch_with_mode(black_box(payload), mode).unwrap());
     }
     let mut samples = Vec::with_capacity(iterations);
+    counting_allocator::reset();
     let start = Instant::now();
     for _ in 0..iterations {
         let before = Instant::now();
@@ -23,6 +26,7 @@ fn main() {
         samples.push(before.elapsed().as_nanos());
     }
     let elapsed = start.elapsed();
+    counting_allocator::report(iterations * events);
     samples.sort_unstable();
     println!("iterations={iterations} events_per_batch={events} events_per_second={:.0} batch_ns_p50={} batch_ns_p95={} batch_ns_p99={}",
         (iterations * events) as f64 / elapsed.as_secs_f64(),

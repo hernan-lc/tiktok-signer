@@ -1,4 +1,6 @@
 //! Offline native event construction/drop benchmark, with optional schema traversal.
+#[path = "../../../scripts/bench/counting_allocator.rs"]
+mod counting_allocator;
 use std::hint::black_box;
 use std::time::Instant;
 use ttl_live::*;
@@ -8,6 +10,9 @@ fn main() {
     let iterations = 10_000;
     let mut samples = Vec::with_capacity(iterations);
     for i in 0..iterations + 100 {
+        if i == 100 {
+            counting_allocator::reset();
+        }
         let start = Instant::now();
         // Inputs are fixed valid bytes. All returned pointers stay within event lifetime.
         unsafe {
@@ -31,6 +36,7 @@ fn main() {
             samples.push(start.elapsed().as_nanos());
         }
     }
+    counting_allocator::report(iterations);
     samples.sort_unstable();
     let seconds = samples.iter().sum::<u128>() as f64 / 1e9;
     println!(
