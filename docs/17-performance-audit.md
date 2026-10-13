@@ -57,3 +57,21 @@ that suite looks for `/tmp/webmssdk.js`. Decoder first run: 35,116 events/s;
 batch p50/p95/p99 331,631 / 564,309 / 830,383 ns. This is one shared-host sample,
 not a stable comparative result. `/usr/bin/time` is unavailable on this host,
 so RSS/CPU measurements have not been collected with that tool.
+
+## Selective decoder
+
+`decode_batch_with_mode` is additive and returns `SelectedBatch`; legacy
+`decode_batch` and event JSON remain unchanged. `Normalized` builds typed events
+and stores unknown payloads once. `Schema` builds only descriptor fields. `Raw`
+keeps only envelope metadata and bounded bytes. `Full` keeps all representations.
+Metadata and ordering remain available in every mode. Schema size/depth/field
+budgets apply whenever schema is requested; raw/normalized modes do not build a
+schema tree. Batch byte/message caps and per-event 4 MiB truncation apply to all.
+Full mode necessarily duplicates unknown payloads to preserve independent owned
+raw and legacy typed representations. No change to those public Vec layouts.
+
+Validated: decoder tests (including four mode regression tests), golden fixture
+parity and package all-target Clippy passed. First normalized sample: 195,600
+events/s, batch p50/p95/p99 57,589 / 90,151 / 100,037 ns. This mode does less work;
+it is not a claim of that speedup for legacy full consumers. Allocation counts
+and sustained RSS still require measurement.
