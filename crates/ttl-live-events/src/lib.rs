@@ -118,6 +118,8 @@ pub enum DecodeMode {
 /// Selective decoding preserves envelope metadata independently of representations.
 #[derive(Debug)]
 pub struct SelectedEvent {
+    /// Server-defined common.create_time units, matching EventEnvelope::timestamp.
+    pub timestamp: Option<u64>,
     pub method: String,
     pub msg_id: u64,
     pub is_history: bool,
@@ -165,10 +167,15 @@ pub fn decode_batch_with_mode(
             } else {
                 None
             };
-            let wire_truncated = if schema.is_none() {
+            let (wire_truncated, timestamp) = if schema.is_none() {
                 dynamic::preflight_event(&message.method, &message.payload, &mut budget)
             } else {
-                false
+                (
+                    false,
+                    schema
+                        .as_ref()
+                        .and_then(|s| s.message("common")?.number("create_time")),
+                )
             };
             let truncated =
                 oversized || wire_truncated || schema.as_ref().is_some_and(|s| s.truncated);
@@ -199,6 +206,7 @@ pub fn decode_batch_with_mode(
                 });
             }
             SelectedEvent {
+                timestamp,
                 method: message.method,
                 msg_id: message.msg_id as u64,
                 is_history: message.is_history,

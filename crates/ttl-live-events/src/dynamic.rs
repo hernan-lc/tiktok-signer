@@ -757,15 +757,23 @@ mod semantic_tests {
 }
 
 /// Enforce descriptor field/depth budgets with borrowed wire values, without a schema tree.
-pub(crate) fn preflight_event(method: &str, payload: &[u8], budget: &mut usize) -> bool {
+pub(crate) fn preflight_event(
+    method: &str,
+    payload: &[u8],
+    budget: &mut usize,
+) -> (bool, Option<u64>) {
     fn scan(
         payload: &[u8],
         schema: Option<&'static MessageSchema>,
         depth: usize,
         left: &mut usize,
+        common: bool,
+        timestamp: &mut Option<u64>,
     ) -> bool {
         use ttl_sign_core::proto::{Reader, WireValue};
         let mut reader = Reader::new(payload);
+        let mut seen_common = false;
+        let mut seen_timestamp = false;
         while let Some(field) = reader.next_field() {
             if *left == 0 {
                 return true;
@@ -777,6 +785,14 @@ pub(crate) fn preflight_event(method: &str, payload: &[u8], budget: &mut usize) 
                 return true;
             }
             let descriptor = schema.and_then(|s| s.field(number));
+            if common && !seen_timestamp && descriptor.is_some_and(|d| d.name == "create_time") {
+                seen_timestamp = true;
+                *timestamp = match value {
+                    WireValue::Varint(value) | WireValue::Fixed64(value) => Some(value),
+                    WireValue::Fixed32(value) => Some(u64::from(value)),
+                    WireValue::Bytes(_) => None,
+                };
+            }
             if let WireValue::Bytes(bytes) = value {
                 if let Some(d) = descriptor.filter(|d| {
                     d.cardinality == FieldCardinality::Repeated
@@ -807,7 +823,20 @@ pub(crate) fn preflight_event(method: &str, payload: &[u8], budget: &mut usize) 
                     if depth >= MAX_SCHEMA_DEPTH || *left == 0 {
                         return true;
                     }
-                    if scan(bytes, schema_by_name(name), depth + 1, left) {
+                    let is_common = depth == 0
+                        && !seen_common
+                        && descriptor.is_some_and(|d| d.name == "common");
+                    if is_common {
+                        seen_common = true;
+                    }
+                    if scan(
+                        bytes,
+                        schema_by_name(name),
+                        depth + 1,
+                        left,
+                        is_common,
+                        timestamp,
+                    ) {
                         return true;
                     }
                 }
@@ -819,7 +848,15 @@ pub(crate) fn preflight_event(method: &str, payload: &[u8], budget: &mut usize) 
     }
     let allowance = (*budget).min(MAX_SCHEMA_FIELDS);
     let mut left = allowance;
-    let truncated = scan(payload, schema_for_method(method), 0, &mut left);
+    let mut timestamp = None;
+    let truncated = scan(
+        payload,
+        schema_for_method(method),
+        0,
+        &mut left,
+        false,
+        &mut timestamp,
+    );
     *budget -= allowance - left;
-    truncated
+    (truncated, timestamp)
 }

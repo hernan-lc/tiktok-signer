@@ -21,6 +21,7 @@ fn selective_modes_preserve_fixture_metadata_and_full_contract() {
         assert_eq!(batch.events.len(), legacy.events.len());
         for (selected, original) in batch.events.iter().zip(&legacy.events) {
             assert_eq!(selected.method, original.raw.method);
+            assert_eq!(selected.timestamp, original.timestamp());
             assert_eq!(selected.msg_id, original.raw.msg_id);
             assert_eq!(selected.is_history, original.raw.is_history);
             if matches!(mode, DecodeMode::Full | DecodeMode::Raw) {
