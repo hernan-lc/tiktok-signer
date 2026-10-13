@@ -73,6 +73,7 @@ async fn main() -> Result<()> {
     // and bundle were actually initialized, not merely that the process exists.
     let embedded = EmbeddedSigner::with_product(source, profile, TRANSPORT_PRODUCT)
         .context("could not start the warm embedded signer")?;
+    metrics.observe_signer(embedded.observer());
     let signer: Box<dyn UrlSigner> = Box::new(embedded);
     let backend = HeadlessBackend::new(
         HeadlessConfig::new(preset.clone(), session.clone()).with_timeout(config.request_timeout),

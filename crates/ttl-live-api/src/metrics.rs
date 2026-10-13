@@ -70,6 +70,7 @@ impl Histogram {
 /// Metrics required to operate and cost-model the short-lived API path.
 #[derive(Debug)]
 pub struct Metrics {
+    signer_observer: std::sync::Mutex<Option<ttl_sign_embedded::SignerObserver>>,
     pub active_live_connections: AtomicU64,
     pub live_connection_rejections_total: AtomicU64,
     pub connect_requests_total: AtomicU64,
@@ -96,6 +97,7 @@ pub struct Metrics {
 impl Default for Metrics {
     fn default() -> Self {
         Self {
+            signer_observer: std::sync::Mutex::new(None),
             active_live_connections: AtomicU64::new(0),
             live_connection_rejections_total: AtomicU64::new(0),
             connect_requests_total: AtomicU64::new(0),
@@ -122,6 +124,12 @@ impl Default for Metrics {
 }
 
 impl Metrics {
+    pub fn observe_signer(&self, observer: ttl_sign_embedded::SignerObserver) {
+        *self
+            .signer_observer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(observer);
+    }
     pub fn render(&self) -> String {
         let mut output = String::new();
         for (name, value) in [
@@ -167,6 +175,29 @@ impl Metrics {
             let _ = writeln!(output, "# TYPE {name} {metric_type}");
             let _ = writeln!(output, "{name} {}", value.load(Ordering::Relaxed));
         }
+        if let Some(observer) = self
+            .signer_observer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            let snapshot = observer.metrics();
+            for (name, value, kind) in [
+                ("signer_queue_depth", snapshot.queue_depth as u64, "gauge"),
+                (
+                    "signer_queue_rejections_total",
+                    snapshot.queue_rejections,
+                    "counter",
+                ),
+                (
+                    "signer_worker_failures_total",
+                    snapshot.worker_failures,
+                    "counter",
+                ),
+            ] {
+                let _ = writeln!(output, "# TYPE {name} {kind}\n{name} {value}");
+            }
+        }
         self.connect_latency_seconds
             .render("connect_latency_seconds", &mut output);
         self.discovery_latency_seconds
@@ -174,5 +205,33 @@ impl Metrics {
         self.sign_latency_seconds
             .render("sign_latency_seconds", &mut output);
         output
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ttl_sign_embedded::{EmbeddedError, Engine, Profile, Signer};
+    struct FakeEngine;
+    impl Engine for FakeEngine {
+        const NAME: &'static str = "metrics-test";
+        fn start(_: &str, _: &str) -> Result<Self, EmbeddedError> {
+            Ok(Self)
+        }
+        fn sign(&mut self, url: &str, _: &str) -> Result<String, String> {
+            Ok(url.into())
+        }
+    }
+    #[test]
+    fn signer_metrics_are_live_and_do_not_own_the_worker() {
+        let signer = Signer::<FakeEngine>::new("", Profile::default()).unwrap();
+        let metrics = Metrics::default();
+        metrics.observe_signer(signer.observer());
+        let rendered = metrics.render();
+        assert!(rendered.contains("# TYPE signer_queue_depth gauge\nsigner_queue_depth 0"));
+        assert!(rendered.contains("signer_queue_rejections_total 0"));
+        assert!(rendered.contains("signer_worker_failures_total 0"));
+        drop(signer);
+        assert!(metrics.render().contains("signer_queue_depth 0"));
     }
 }

@@ -196,3 +196,17 @@ fn overflowing_configuration_returns_an_error() {
         .is_err());
     }
 }
+
+#[tokio::test]
+async fn metrics_observer_does_not_retain_worker_or_queue() {
+    let signer =
+        Signer::<Fake>::with_product("", Profile::default(), SigningProduct::WsDirect).unwrap();
+    let observer = signer.observer();
+    assert!(signer
+        .sign_with("panic", SigningProduct::WsDirect)
+        .await
+        .is_err());
+    signer.shutdown().await;
+    assert_eq!(observer.metrics().queue_depth, 0);
+    assert_eq!(observer.metrics().worker_failures, 1);
+}

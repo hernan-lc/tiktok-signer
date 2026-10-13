@@ -140,7 +140,7 @@ impl Default for SignerConfig {
         }
     }
 }
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct Counters {
     stopping: AtomicBool,
     rejections: AtomicU64,
@@ -151,6 +151,25 @@ pub struct SignerMetrics {
     pub queue_depth: usize,
     pub queue_rejections: u64,
     pub worker_failures: u64,
+}
+
+/// Read-only counters that do not keep the request queue or worker alive.
+#[derive(Clone, Debug)]
+pub struct SignerObserver {
+    requests: tokio::sync::mpsc::WeakSender<Request>,
+    counters: Arc<Counters>,
+}
+impl SignerObserver {
+    pub fn metrics(&self) -> SignerMetrics {
+        SignerMetrics {
+            queue_depth: self
+                .requests
+                .upgrade()
+                .map_or(0, |s| s.max_capacity() - s.capacity()),
+            queue_rejections: self.counters.rejections.load(Ordering::Relaxed),
+            worker_failures: self.counters.failures.load(Ordering::Relaxed),
+        }
+    }
 }
 
 /// A signer holding a warm engine on its own thread.
@@ -309,6 +328,16 @@ impl<E: Engine + 'static> Signer<E> {
 }
 
 impl<E: Engine> Signer<E> {
+    pub fn observer(&self) -> SignerObserver {
+        SignerObserver {
+            requests: self
+                .requests
+                .as_ref()
+                .expect("live signer queue")
+                .downgrade(),
+            counters: Arc::clone(&self.counters),
+        }
+    }
     pub fn metrics(&self) -> SignerMetrics {
         SignerMetrics {
             queue_depth: self
