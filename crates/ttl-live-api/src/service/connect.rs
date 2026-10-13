@@ -579,6 +579,46 @@ mod tests {
         )
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "offline broker concurrency benchmark"]
+    async fn offline_broker_concurrency_benchmark() {
+        for concurrency in [10, 100, 1000] {
+            let calls = Arc::new(AtomicU64::new(0));
+            let service = service(calls.clone());
+            let before = Instant::now();
+            let mut tasks = tokio::task::JoinSet::new();
+            for index in 0..concurrency {
+                let service = service.clone();
+                tasks.spawn(async move {
+                    let started = Instant::now();
+                    let result = service
+                        .connect(&format!("creator{index}"), "anonymous", 1)
+                        .await;
+                    (started.elapsed().as_nanos(), result.is_ok())
+                });
+            }
+            let mut samples = Vec::new();
+            let mut accepted = 0;
+            while let Some(result) = tasks.join_next().await {
+                let (duration, ok) = result.unwrap();
+                samples.push(duration);
+                accepted += usize::from(ok);
+            }
+            samples.sort_unstable();
+            assert!(service.flights.lock().unwrap().is_empty());
+            assert_eq!(
+                service.discovery_slots.available_permits(),
+                service.config.max_concurrent_discovery
+            );
+            assert_eq!(
+                service.signing_slots.available_permits(),
+                service.config.max_concurrent_signs
+            );
+            println!("concurrency={concurrency} accepted={accepted} rejected={} elapsed_ns={} request_ns_p50={} request_ns_p95={} request_ns_p99={} discovery_calls={}",
+                concurrency-accepted, before.elapsed().as_nanos(), samples[concurrency/2], samples[concurrency*95/100], samples[concurrency*99/100], calls.load(Ordering::Relaxed));
+        }
+    }
+
     #[test]
     fn normalization_accepts_both_public_spellings() {
         assert_eq!(normalize_unique_id(" creator ").unwrap(), "creator");
