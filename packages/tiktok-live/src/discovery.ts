@@ -8,6 +8,7 @@
 // The Rust statement of these URLs and shapes is `crates/ttl-sign-core/src/room.rs`; this is the
 // same set, and `test/discovery.test.ts` pins the parsing against recorded shapes.
 
+import { readResponseText } from './http.js';
 import { USER_AGENT } from './session.js';
 import { validateJson } from './json-validation.js';
 import {
@@ -122,7 +123,7 @@ export class Discovery {
     if (!response.ok) throw new Error(`HTTP ${response.status} from ${new URL(url).pathname}`);
     let raw: unknown;
     try {
-      raw = await response.json();
+      raw = response.body ? JSON.parse(await readResponseText(response, 16 * 1024 * 1024)) : await response.json();
     } catch {
       throw new TypeError(`Invalid ${endpoint}: $ expected valid JSON`);
     }

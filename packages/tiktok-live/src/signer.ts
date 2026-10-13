@@ -25,6 +25,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
+import { readResponseText } from './http.js';
 import { USER_AGENT } from './session.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -108,7 +109,7 @@ async function readBundle({
   if (!response.ok) {
     throw new Error(`could not download the signing bundle: HTTP ${response.status} from ${url}`);
   }
-  const source = await response.text();
+  const source = await readResponseText(response, 8 * 1024 * 1024);
   if (!matchesDigest(source, expectedSha256)) {
     throw new Error(`the signing bundle from ${url} did not match its expected SHA-256`);
   }
