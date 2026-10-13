@@ -217,6 +217,15 @@ impl LiveConnection {
         room_id: u64,
         config: &ConnectConfig,
     ) -> Result<Self, WsError> {
+        if config.heartbeat.is_zero()
+            || std::time::Instant::now()
+                .checked_add(config.heartbeat)
+                .is_none()
+        {
+            return Err(WsError::Transport(
+                "heartbeat interval must be positive and representable".into(),
+            ));
+        }
         let mut request = uri
             .as_str()
             .into_client_request()
@@ -468,6 +477,27 @@ fn gunzip(data: &[u8]) -> Result<Vec<u8>, WsError> {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn invalid_heartbeat_is_rejected_before_io() {
+        for heartbeat in [Duration::ZERO, Duration::MAX] {
+            let config = ConnectConfig {
+                heartbeat,
+                ..ConnectConfig::default()
+            };
+            let result = LiveConnection::open_uri(
+                "ws://127.0.0.1:9/?room_id=1",
+                &CookieJar::parse("ttwid=test"),
+                "test",
+                "",
+                &config,
+            )
+            .await;
+            assert!(
+                matches!(result, Err(WsError::Transport(message)) if message.contains("heartbeat interval"))
+            );
+        }
+    }
+
     use super::*;
     use flate2::write::GzEncoder;
     use flate2::Compression;
