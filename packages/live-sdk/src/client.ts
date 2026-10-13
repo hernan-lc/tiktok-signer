@@ -8,7 +8,7 @@ import { asError, isRetryable, LiveApiError, ProtocolError, SocketError } from '
 import { boundedHeartbeatMs, startHeartbeat } from './heartbeat.js';
 import { DEFAULT_RECONNECT, reconnectDelay } from './reconnect.js';
 import {
-  ackFrame,
+  ackFrameForBatch,
   carriesEvents,
   decodeBatch,
   decodePushFrame,
@@ -355,7 +355,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     // TikTok push server decide this client is dead.
     if (batch.needAck) {
       try {
-        socket.send(ackFrame(frame, batch.internalExt));
+        socket.send(ackFrameForBatch(frame, batch.internalExt));
       } catch (error) {
         this.#emitError(error);
       }

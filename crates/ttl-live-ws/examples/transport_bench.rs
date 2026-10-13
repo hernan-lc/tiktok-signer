@@ -14,10 +14,12 @@ async fn main() -> anyhow::Result<()> {
         .map(|s| s.parse().expect("iterations"))
         .unwrap_or(1000);
     assert!((100..=10000).contains(&iterations));
-    let batch = include_bytes!("../../../fixtures/events/batch.pb");
+    let mut batch = include_bytes!("../../../fixtures/events/batch.pb").to_vec();
+    // The original HTTP capture has need_ack=false. This benchmark explicitly requests ACKs.
+    batch.extend_from_slice(&[0x48, 1]);
     let payload = if gzip {
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        encoder.write_all(batch)?;
+        encoder.write_all(&batch)?;
         encoder.finish()?
     } else {
         batch.to_vec()
@@ -76,12 +78,15 @@ async fn main() -> anyhow::Result<()> {
     counting_allocator::reset();
     let started = Instant::now();
     for _ in 0..iterations {
-        let message = connection.next_message().await.expect("message")?;
+        let message =
+            tokio::time::timeout(std::time::Duration::from_secs(2), connection.next_message())
+                .await?
+                .expect("message")?;
         assert_eq!(message.payload, batch);
         black_box(message);
     }
     connection.close().await;
-    let mut samples = peer.await?;
+    let mut samples = tokio::time::timeout(std::time::Duration::from_secs(2), peer).await??;
     println!("allocation_unit=batch_including_loopback_peer");
     counting_allocator::report(iterations);
     samples.sort_unstable();

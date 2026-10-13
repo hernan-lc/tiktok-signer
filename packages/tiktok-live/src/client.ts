@@ -15,7 +15,7 @@ import fs from 'node:fs';
 
 import { Discovery } from './discovery.js';
 import { EVENT, decodeEvent } from './events.js';
-import { ackFrame, carriesEvents, decodeBatch, decodePushFrame, decompress } from './frames.js';
+import { ackFrameForBatch, carriesEvents, decodeBatch, decodePushFrame, decompress } from './frames.js';
 import {
   IDENTITY, PATH, SOCKET_HOST, enterRoomFrame, heartbeatFrame, socketConfig, socketQuery,
 } from './player.js';
@@ -501,7 +501,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     // seconds later, and a slow listener must not be able to cause that.
     if (batch.needAck) {
       try {
-        this.#socket?.send(ackFrame(frame, batch.internalExt));
+        this.#socket?.send(ackFrameForBatch(frame, batch.internalExt));
       } catch (error) {
         this.#emitError(error);
       }

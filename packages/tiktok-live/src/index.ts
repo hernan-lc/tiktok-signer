@@ -35,6 +35,7 @@ export type {
 } from './session.js';
 export {
   ackFrame,
+  ackFrameForBatch,
   carriesEvents,
   decodeBatch,
   decodePushFrame,

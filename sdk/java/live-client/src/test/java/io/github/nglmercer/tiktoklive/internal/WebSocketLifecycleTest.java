@@ -52,7 +52,7 @@ class WebSocketLifecycleTest {
                                                     .setContent("hello")
                                                     .build();
                                     var batch =
-                                            ProtoMessageFetchResult.newBuilder()
+                                            ProtoMessageFetchResult.newBuilder().setNeedAck(true)
                                                     .setInternalExt("ack-ext")
                                                     .addMessages(
                                                             BaseProtoMessage.newBuilder()
@@ -66,6 +66,9 @@ class WebSocketLifecycleTest {
                                                     .setPayloadType("msg")
                                                     .setPayload(batch.toByteString())
                                                     .build();
+                                    var unacknowledged = incoming.toBuilder().setLogId(98)
+                                            .setPayload(batch.toBuilder().setNeedAck(false).build().toByteString()).build();
+                                    socket.send(ByteString.of(unacknowledged.toByteArray()));
                                     socket.send(ByteString.of(incoming.toByteArray()));
                                     socket.send(ByteString.of(incoming.toByteArray()));
                                 } else if (frame.getPayloadType().equals("ack")) {
@@ -179,7 +182,7 @@ class WebSocketLifecycleTest {
                                     new WebSocketListener() {
                                         public void onOpen(WebSocket ws, Response response) {
                                             var batch =
-                                                    ProtoMessageFetchResult.newBuilder()
+                                                    ProtoMessageFetchResult.newBuilder().setNeedAck(true)
                                                             .setHeartbeatDuration(1000)
                                                             .build();
                                             var frame =

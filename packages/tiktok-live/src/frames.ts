@@ -126,11 +126,15 @@ export function decodeBatch(payload: ArrayBuffer | ArrayBufferView): ProtoMessag
 
 /// The acknowledgement for a frame.
 ///
-/// The payload is the batch's `internal_ext`, or `-` when it is empty — the server rejects an
-/// empty one. Unacknowledged frames stop the push after a few seconds, which looks exactly like a
-/// quiet room.
+/// Legacy ACK helper: preserves the historical `-` fallback byte contract.
+/// Transport delivery uses ackFrameForBatch, matching the verified player branch.
 export function ackFrame(frame: WebcastPushFrame, internalExt: string): Buffer {
   return pushFrame(FRAME_TYPE.ack, internalExt || '-', { logId: frame.logId });
+}
+
+/** Per-batch player ACK; an absent extension leaves the payload empty. */
+export function ackFrameForBatch(frame: WebcastPushFrame, internalExt: string): Buffer {
+  return pushFrame(FRAME_TYPE.ack, internalExt, { logId: frame.logId });
 }
 
 /// Whether a frame is one of the transport's own, for logging.

@@ -253,7 +253,7 @@ public final class TikTokLive implements AutoCloseable {
             if (!frame.getPayloadType().equals("msg")) return;
             var batch = Protocol.batch(frame);
             // ACK runs before event normalization and before any application executor.
-            if (!ws.send(ByteString.of(Protocol.ack(frame, batch.getInternalExt())))) {
+            if (batch.getNeedAck() && !ws.send(ByteString.of(Protocol.ackForBatch(frame, batch.getInternalExt())))) {
                 synchronized (this) {
                     if (valid(token)) fail(token, new SocketException("ACK could not be sent"));
                 }

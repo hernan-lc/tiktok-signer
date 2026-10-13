@@ -107,7 +107,9 @@ pub async fn run(
                     };
                     match message {
                         Some(Ok(message)) => {
-                            sink.on_ack_duration(connection.last_ack_duration());
+                            if connection.last_ack_was_sent() {
+                                sink.on_ack_duration(connection.last_ack_duration());
+                            }
                             let started = std::time::Instant::now();
                             let decoded = ttl_live_events::decode_batch(&message.payload);
                             sink.on_decode_duration(started.elapsed());

@@ -7,6 +7,7 @@ import { gzipSync } from 'node:zlib';
 import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
 import {
   ackFrame,
+  ackFrameForBatch,
   carriesEvents,
   decodeBatch,
   decodePushFrame,
@@ -179,5 +180,31 @@ test('batch message count is checked before generated repeated-message allocatio
   assert.throws(() => decodeBatch(Buffer.concat([allowed, Buffer.from([10, 0])])), /8192 messages/);
   for (const malformed of [[10, 255], [10, 5, 0], [8, 1], [15], [18, 128]]) {
     assert.throws(() => decodeBatch(Uint8Array.from(malformed)));
+  }
+});
+
+test('player per-batch ACK leaves an empty extension empty while legacy helper stays compatible', () => {
+  const incoming = create(WebcastPushFrameSchema, { logId: 44n });
+  const ack = decodePushFrame(ackFrameForBatch(incoming, ''));
+  assert.equal(ack.logId, 44n);
+  assert.equal(ack.payloadType, 'ack');
+  assert.equal(ack.payload.length, 0);
+  assert.equal(Buffer.from(decodePushFrame(ackFrame(incoming, '')).payload).toString(), '-');
+});
+
+test('per-batch ACK bytes match the shared public-player reference fixture', async () => {
+  const { readFileSync } = await import('node:fs');
+  const fixture = JSON.parse(readFileSync(new URL('../../../fixtures/research/player-ack-protocol-v1.json', import.meta.url), 'utf8')) as {
+    synthetic_cases: Array<{ need_ack: boolean; extension: string; log_id: number; send_ack: boolean; ack_hex: string | null }>;
+  };
+  for (const item of fixture.synthetic_cases) {
+    const batch = decodeBatch(toBinary(ProtoMessageFetchResultSchema, create(ProtoMessageFetchResultSchema, {
+      needAck: item.need_ack, internalExt: item.extension,
+    })));
+    assert.equal(batch.needAck, item.send_ack);
+    if (batch.needAck) {
+      const frame = create(WebcastPushFrameSchema, { logId: BigInt(item.log_id) });
+      assert.equal(ackFrameForBatch(frame, batch.internalExt).toString('hex'), item.ack_hex);
+    }
   }
 });

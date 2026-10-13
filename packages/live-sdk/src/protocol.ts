@@ -4,6 +4,7 @@
 
 export {
   ackFrame,
+  ackFrameForBatch,
   carriesEvents,
   decodeBatch,
   decodePushFrame,

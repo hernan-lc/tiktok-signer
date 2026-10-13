@@ -59,6 +59,11 @@ public final class Protocol {
                 frame.getLogId());
     }
 
+    /** Player-compatible transport ACK; legacy ack retains its historical fallback. */
+    public static byte[] ackForBatch(WebcastPushFrame incoming, String ext) {
+        return frame("ack", ext.getBytes(java.nio.charset.StandardCharsets.UTF_8), incoming.getLogId());
+    }
+
     public static byte[] enter(String room) {
         return frame(
                 "im_enter_room",

@@ -27,6 +27,31 @@ class ProtocolParityTest {
     }
 
     @Test
+    void perBatchAckMatchesSharedPlayerReferenceFixture() throws Exception {
+        var fixture = JSON.readTree(Files.readAllBytes(ROOT.resolve("fixtures/research/player-ack-protocol-v1.json")));
+        for (var item : fixture.path("synthetic_cases")) {
+            var batch = ProtoMessageFetchResult.newBuilder().setNeedAck(item.path("need_ack").asBoolean())
+                    .setInternalExt(item.path("extension").asText()).build();
+            var incoming = WebcastPushFrame.newBuilder().setLogId(item.path("log_id").asLong())
+                    .setPayload(batch.toByteString()).build();
+            var decoded = Protocol.batch(incoming);
+            assertEquals(item.path("send_ack").asBoolean(), decoded.getNeedAck());
+            if (decoded.getNeedAck()) assertEquals(item.path("ack_hex").asText(),
+                    HexFormat.of().formatHex(Protocol.ackForBatch(incoming, decoded.getInternalExt())));
+        }
+    }
+
+    @Test
+    void perBatchAckKeepsEmptyExtensionAndLegacyEncodingCompatible() throws Exception {
+        var incoming = WebcastPushFrame.newBuilder().setLogId(44).build();
+        var ack = Protocol.decode(Protocol.ackForBatch(incoming, ""));
+        assertEquals(44, ack.getLogId());
+        assertEquals("ack", ack.getPayloadType());
+        assertTrue(ack.getPayload().isEmpty());
+        assertEquals("-", Protocol.decode(Protocol.ack(incoming, "")).getPayload().toStringUtf8());
+    }
+
+    @Test
     void emptyMessageFloodIsRejectedBeforeGeneratedAllocation() throws Exception {
         byte[] bytes = new byte[8193 * 2];
         for (int i = 0; i < bytes.length; i += 2) bytes[i] = 10;

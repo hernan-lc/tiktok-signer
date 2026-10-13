@@ -26,6 +26,7 @@ export { normalizeUniqueId } from './unique-id.js';
 // class API keeps signing and room-id handling out of the caller's control.
 export {
   ackFrame,
+  ackFrameForBatch,
   carriesEvents,
   decodeBatch,
   decodePushFrame,

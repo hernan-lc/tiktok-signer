@@ -118,6 +118,7 @@ pub struct LiveConnection {
     room_id: u64,
     heartbeat_sequence: u64,
     last_ack_duration: Duration,
+    last_ack_was_sent: bool,
     heartbeat: tokio::time::Interval,
     /// Options returned by the server in `Handshake-Options`, useful for diagnostics.
     handshake_options: Vec<(String, String)>,
@@ -290,6 +291,7 @@ impl LiveConnection {
             room_id,
             heartbeat_sequence: INITIAL_HEARTBEAT_SEQUENCE,
             last_ack_duration: Duration::ZERO,
+            last_ack_was_sent: false,
             heartbeat,
             handshake_options,
             uri,
@@ -315,6 +317,11 @@ impl LiveConnection {
     /// Duration of the most recent ACK write attempt.
     pub fn last_ack_duration(&self) -> Duration {
         self.last_ack_duration
+    }
+
+    /// Whether the most recent delivered batch required an ACK.
+    pub fn last_ack_was_sent(&self) -> bool {
+        self.last_ack_was_sent
     }
 
     pub async fn next_message(&mut self) -> Option<Result<LiveMessage, WsError>> {
@@ -373,18 +380,21 @@ impl LiveConnection {
             }
         };
 
-        // Read only borrowed transport fields; application decoding happens after ACK.
-        // Keep acknowledging every msg frame: existing player compatibility fixtures
-        // do not establish that need_ack=false disables WebSocket acknowledgement.
-        let extension = batch_internal_ext(&payload)?;
+        // Verified against the public player's transport branch: ACK only requested batches.
+        // Scan borrowed transport metadata once, before application event processing.
+        let (extension, need_ack) = batch_ack_metadata(&payload)?;
         self.internal_ext.clear();
         self.internal_ext.push_str(extension);
-        let ack = frame.ack(&self.internal_ext);
-        let ack_started = std::time::Instant::now();
-        if let Err(e) = self.stream.send(WsMessage::Binary(ack.encode())).await {
-            warn!(error = %e, "could not send ack");
+        self.last_ack_was_sent = need_ack;
+        self.last_ack_duration = Duration::ZERO;
+        if need_ack {
+            let ack = frame.ack_for_batch(&self.internal_ext);
+            let ack_started = std::time::Instant::now();
+            if let Err(e) = self.stream.send(WsMessage::Binary(ack.encode())).await {
+                warn!(error = %e, "could not send ack");
+            }
+            self.last_ack_duration = ack_started.elapsed();
         }
-        self.last_ack_duration = ack_started.elapsed();
 
         Ok(Some(LiveMessage {
             log_id: frame.log_id,
@@ -452,12 +462,19 @@ fn parse_handshake_options(raw: &str) -> Vec<(String, String)> {
 }
 
 /// Last field wins, matching protobuf scalar semantics; never reuse a previous batch's extension.
-fn batch_internal_ext(payload: &[u8]) -> Result<&str, WsError> {
+fn batch_ack_metadata(payload: &[u8]) -> Result<(&str, bool), WsError> {
     use ttl_sign_core::proto::{Reader, WireValue};
     let mut extension = "";
+    let mut need_ack = false;
     let mut reader = Reader::new(payload);
     while let Some(field) = reader.next_field() {
         let (number, value) = field.map_err(|e| WsError::Decode(e.to_string()))?;
+        if number == 9 {
+            need_ack = match value {
+                WireValue::Varint(value) => value != 0,
+                _ => return Err(WsError::Decode("invalid need_ack wire type".into())),
+            };
+        }
         if number == 5 {
             match value {
                 WireValue::Bytes(bytes) => {
@@ -468,7 +485,7 @@ fn batch_internal_ext(payload: &[u8]) -> Result<&str, WsError> {
             }
         }
     }
-    Ok(extension)
+    Ok((extension, need_ack))
 }
 
 fn gunzip(data: &[u8]) -> Result<Vec<u8>, WsError> {
@@ -565,8 +582,219 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn heartbeat_and_acks_progress_during_an_ordered_event_burst() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let peer = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let (mut writer, mut reader) = ws.split();
+            let sender = tokio::spawn(async move {
+                for id in 1..=200 {
+                    let mut batch = ttl_sign_core::proto::Writer::new();
+                    batch.bool_field(9, true);
+                    let frame = PushFrame {
+                        log_id: id,
+                        payload_type: "msg".into(),
+                        payload: batch.finish(),
+                        ..Default::default()
+                    };
+                    writer
+                        .send(WsMessage::Binary(frame.encode()))
+                        .await
+                        .unwrap();
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+                writer
+            });
+            let mut acknowledgements = 0;
+            let mut heartbeats = 0;
+            while acknowledgements < 200 {
+                let incoming = tokio::time::timeout(Duration::from_secs(2), reader.next())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+                if let WsMessage::Binary(bytes) = incoming {
+                    let frame = PushFrame::decode(&bytes).unwrap();
+                    match frame.payload_type.as_str() {
+                        "ack" => {
+                            acknowledgements += 1;
+                            assert_eq!(frame.log_id, acknowledgements);
+                        }
+                        "hb" => {
+                            heartbeats += 1;
+                        }
+                        _ => (),
+                    }
+                }
+            }
+            let mut writer = sender.await.unwrap();
+            writer.send(WsMessage::Close(None)).await.unwrap();
+            assert!(
+                heartbeats >= 2,
+                "heartbeats must remain scheduled across the burst"
+            );
+        });
+        let config = ConnectConfig {
+            heartbeat: Duration::from_millis(5),
+            ..ConnectConfig::default()
+        };
+        let mut connection = LiveConnection::open_uri(
+            &format!("ws://{address}/?room_id=1"),
+            &CookieJar::parse("ttwid=offline"),
+            "test",
+            "",
+            &config,
+        )
+        .await
+        .unwrap();
+        for id in 1..=200 {
+            let message = tokio::time::timeout(Duration::from_secs(2), connection.next_message())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(message.log_id, id);
+        }
+        connection.close().await;
+        tokio::time::timeout(Duration::from_secs(2), peer)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[test]
+    fn player_reference_fixture_matches_ack_wire_bytes() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../fixtures/research/player-ack-protocol-v1.json"
+        ))
+        .unwrap();
+        for case in fixture["synthetic_cases"].as_array().unwrap() {
+            let extension = case["extension"].as_str().unwrap();
+            let mut batch = ttl_sign_core::proto::Writer::new();
+            batch
+                .bool_field(9, case["need_ack"].as_bool().unwrap())
+                .str_field(5, extension);
+            let (actual_extension, requested) = batch_ack_metadata(&batch.finish())
+                .map(|(e, n)| (e.to_owned(), n))
+                .unwrap();
+            assert_eq!(requested, case["send_ack"].as_bool().unwrap());
+            if requested {
+                let incoming = PushFrame {
+                    log_id: case["log_id"].as_u64().unwrap(),
+                    ..Default::default()
+                };
+                let hex = incoming
+                    .ack_for_batch(&actual_extension)
+                    .encode()
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>();
+                assert_eq!(hex, case["ack_hex"].as_str().unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn player_ack_metadata_is_per_batch_last_wins_and_defaults_false() {
+        use ttl_sign_core::proto::Writer;
+        assert_eq!(batch_ack_metadata(&[]).unwrap(), ("", false));
+        let mut batch = Writer::new();
+        batch
+            .bool_field(9, true)
+            .str_field(5, "current")
+            .bool_field(9, false);
+        let mut payload = batch.finish();
+        payload.extend_from_slice(&[0x48, 0]); // Explicit false; Writer omits default scalar values.
+        assert_eq!(batch_ack_metadata(&payload).unwrap(), ("current", false));
+        let mut batch = Writer::new();
+        batch.bool_field(9, true);
+        assert_eq!(batch_ack_metadata(&batch.finish()).unwrap(), ("", true));
+        assert!(batch_ack_metadata(&[74, 0]).is_err());
+        let frame = PushFrame {
+            log_id: 44,
+            ..Default::default()
+        };
+        let ack = frame.ack_for_batch("");
+        assert_eq!(ack.log_id, 44);
+        assert!(ack.payload.is_empty());
+        assert_eq!(frame.ack("").payload, b"-");
+    }
+
+    #[tokio::test]
+    async fn ack_false_is_skipped_and_empty_extension_does_not_reuse_state() {
+        use ttl_sign_core::proto::Writer;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let peer = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            for (id, requested, extension) in [
+                (42, false, "ignored"),
+                (43, true, "current"),
+                (44, true, ""),
+            ] {
+                let mut batch = Writer::new();
+                batch.bool_field(9, requested).str_field(5, extension);
+                let frame = PushFrame {
+                    log_id: id,
+                    payload_type: "msg".into(),
+                    payload: batch.finish(),
+                    ..Default::default()
+                };
+                ws.send(WsMessage::Binary(frame.encode())).await.unwrap();
+                if requested {
+                    loop {
+                        let message = ws.next().await.unwrap().unwrap();
+                        if let WsMessage::Binary(bytes) = message {
+                            let ack = PushFrame::decode(&bytes).unwrap();
+                            if ack.payload_type == "ack" {
+                                assert_eq!(ack.log_id, id, "false batch must not produce ACK");
+                                assert_eq!(ack.payload, extension.as_bytes());
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            while let Some(Ok(message)) = ws.next().await {
+                if message.is_close() {
+                    break;
+                }
+            }
+        });
+        let mut connection = LiveConnection::open_uri(
+            &format!("ws://{address}/?room_id=1"),
+            &CookieJar::parse("ttwid=offline"),
+            "test",
+            "stale",
+            &ConnectConfig::default(),
+        )
+        .await
+        .unwrap();
+        for (id, ack) in [(42, false), (43, true), (44, true)] {
+            let message = tokio::time::timeout(Duration::from_secs(2), connection.next_message())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(message.log_id, id);
+            assert_eq!(connection.last_ack_was_sent(), ack);
+        }
+        connection.close().await;
+        tokio::time::timeout(Duration::from_secs(2), peer)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
     #[test]
     fn ack_extension_matches_sanitized_capture_and_changes_per_batch() {
+        fn batch_internal_ext(bytes: &[u8]) -> Result<&str, WsError> {
+            batch_ack_metadata(bytes).map(|m| m.0)
+        }
         let capture = include_bytes!("../../../fixtures/events/batch.pb");
         assert_eq!(
             batch_internal_ext(capture).unwrap(),

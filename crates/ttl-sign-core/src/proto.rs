@@ -559,6 +559,16 @@ impl PushFrame {
         }
     }
 
+    /// Player-compatible per-batch ACK. Empty extension leaves payload empty.
+    /// The legacy `ack` helper retains its historical `-` fallback contract.
+    pub fn ack_for_batch(&self, internal_ext: &str) -> Self {
+        let mut ack = self.ack(internal_ext);
+        if internal_ext.is_empty() {
+            ack.payload.clear();
+        }
+        ack
+    }
+
     /// Frame sent immediately after the handshake to enter the room.
     ///
     /// `room_id` is not in the envelope: it is inside `WebcastImEnterRoomMessage`, the

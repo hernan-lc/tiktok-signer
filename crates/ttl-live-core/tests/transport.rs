@@ -51,6 +51,7 @@ async fn actual_websocket_delivers_all_methods_and_stops_without_callbacks_after
         let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
         ws.next().await.unwrap().unwrap(); // room-entry handshake
         let batch = ttl_live_proto::ProtoMessageFetchResult {
+            need_ack: true,
             messages: vec![
                 ttl_live_proto::BaseProtoMessage {
                     method: "WebcastChatMessage".into(),
