@@ -8,7 +8,7 @@ compatibility justification. All benchmarks use committed offline fixtures.
 
 - [ ] Phase 0: complete baseline, lifecycle audit and issue inventory
 - [x] Phase 1: decoder modes and allocation reduction
-- [ ] Phase 2: ACK and transport lifecycle
+- [x] Phase 2: ACK and transport lifecycle
 - [x] Phase 3: bounded embedded signing and cancellation
 - [x] Phase 4: native callback delivery and ownership
 - [ ] Phase 5: Node bounds and lifecycle
@@ -359,9 +359,9 @@ handshake and an idle socket read without delivering stale callbacks.
 
 - Phase 0/9: restarted Node thirty-minute lifecycle soak has not finished. Its
   interrupted predecessor is not evidence of a completed soak.
-- Phase 2: ACK extension/log-ID fixtures and loopback tests pass; server behavior
-  for captured `need_ack=false` WebSocket batches remains unverified. Legacy
-  Rust/Java ACK frequency is preserved pending protocol evidence.
+- Phase 2: public player transport source now verifies ACK gating and empty-extension
+  behavior. Shared golden fixtures and loopback tests pass. Actual captured server
+  acceptance is not claimed; no real LIVE traffic is needed for offline validation.
 - Phase 5: bounded delivery, shutdown, reconnect and decompression regression tests
   pass. Final Node sustained-memory result remains pending.
 - Phase 7: host JNI ownership tests, Android JVM/Robolectric burst/reset tests,
@@ -384,3 +384,48 @@ Node final single-run baseline/current decode comparison: 45,273/46,710 events/s
 batch p50 0.266/0.262 ms, p95 0.421/0.375 ms, p99 0.560/0.544 ms; max RSS
 107372/106112 KiB. Repeated Rust comparisons are preferred for default-path
 regression assessment; neither single Node timing proves a percentage improvement.
+
+## Final audit additions
+
+- Rust benchmark-only CPU instrumentation reads process user/system ticks on Linux.
+  Single-run baseline/default/normalized CPU was 25,000 / 26,846 / 15,615 ns/event;
+  tick resolution is 10 ms and results are cumulative process CPU divided by event
+  count. Current native metadata CPU was 35,000 ns/event. Timing instrumentation
+  is not linked into SDK libraries.
+- JVM/Robolectric scheduling comparison for 1000 events: individual Handler posts
+  took 14,880,258 ns to enqueue, batched handoff 530,758 ns. Enqueue p50/p95/p99
+  9828/22220/81005 versus 171/217/1053 ns. JVM used-heap snapshots are not allocation
+  counts and these single runs include warm-up effects. No device frame-performance
+  conclusion is inferred.
+- Android guest-cookie accumulation is now explicitly capped at 256 names and
+  65,536 key/value characters. Updates are atomic under a lock; overflow preserves
+  the preceding identity. Regression tests cover count/size overflow and cleanup.
+- Android log timestamp formatting is synchronized; listener snapshots permit
+  reentrant listener removal without invalidating iteration. Concurrent formatting
+  and self-removal tests pass.
+- Latest native ThreadSanitizer and AddressSanitizer runs passed after metrics
+  cleanup changes. Existing native declarations/layouts remain unchanged; additive
+  metrics text uses the existing owned-string/free contract.
+- Hosted CI is unavailable: the GitHub Actions permissions endpoint reports
+  `enabled: false` for this repository. No repository settings were changed.
+  CI definitions have been updated and equivalent supported checks executed locally.
+
+
+## ACK evidence resolved by public player-code inspection
+
+Public source retrieved on 2026-10-13 verifies a decoded-batch `need_ack` guard,
+current-batch extension, incoming frame log ID and empty-extension omission.
+[The source/hash record](../fixtures/research/player-ack-protocol-v1.json) links
+its provenance and labels the golden cases synthetic. This supersedes earlier
+journal notes preserving unconditional Rust/Java ACKs for lack of evidence.
+Transport paths now follow the player. Existing public helper encodings remain
+unchanged through additive per-batch helpers. Rust scans only borrowed transport
+metadata, ACKs before application processing and records timing only for attempted
+ACK writes. Rust loopback tests skip a false batch then verify true/empty batches.
+Node and Java consume the same golden bytes; Java loopback tests include a false
+batch before requested ACKs. No captured server-acceptance claim is made.
+
+The loopback benchmark now explicitly appends `need_ack=true` to the sanitized
+HTTP capture (which itself has false/default). Earlier benchmark figures describe
+the pre-gating implementation. New measurements use the same ACK-requesting
+synthetic workload for baseline and current binaries.

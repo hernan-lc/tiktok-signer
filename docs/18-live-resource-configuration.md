@@ -118,13 +118,23 @@ owned timers are removed immediately, and presence monitoring is bounded by
 `Builder.maxWatches` (1024 by default, configurable 1–65536). User-supplied
 callback executors remain user-owned and need their own resource bounds.
 
+Android guest cookies are bounded at 256 names / 65,536 key/value characters;
+overflow leaves the prior identity intact. Logging timestamps and listener
+registration/removal are synchronized.
+
+Direct Node retry jitter is opt-in through `reconnectJitter` (0..1, default 0).
+Rust reconnect wrappers expose `with_jitter` with a caller-owned sample source.
+Both retain existing default retry timing and bound jitter to the delay ceiling.
+
 ## Protocol and verification limits
 
-Rust and Java ACK frequency remains compatible with previous behavior. The
-current batch's extension and frame log ID are used. No sanitized captured
-WebSocket fixture proves the server's behavior for `need_ack = false`; changing
-ACK frequency requires that evidence. Synthetic fixtures validate encoding/state
-but do not establish server acceptance.
+Rust, Node and Java transport paths follow the verified public player branch:
+ACK only when the current batch requests it, echo that batch's extension, and
+preserve the incoming frame log ID. An empty extension leaves payload empty.
+Existing public ACK helper bytes remain compatible through separate per-batch
+helpers. The [provenance fixture](../fixtures/research/player-ack-protocol-v1.json)
+records source URL/hash and synthetic golden cases. This validates player behavior;
+it is not a captured server acceptance trace. No real LIVE traffic is required in CI.
 
 See [the performance audit](17-performance-audit.md) for executed tests,
 measurements and explicitly incomplete platform checks. Timing samples are not
