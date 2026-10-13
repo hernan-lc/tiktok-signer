@@ -54,6 +54,10 @@ int main(void) {
     memset(&metrics,0,sizeof(metrics));
     assert(ttl_live_client_delivery_metrics(client, &metrics));
     assert(metrics.queue_depth == 0 && metrics.events_received == 0);
+    char *prometheus = ttl_live_client_metrics_prometheus(client);
+    assert(prometheus != NULL && strstr(prometheus, "live_event_queue_depth 0") != NULL);
+    assert(strstr(prometheus, "websocket_ack_duration_seconds_count 0") != NULL);
+    ttl_string_free(prometheus);
     assert(ttl_live_client_disconnect(client) == TTL_OK);
     ttl_live_client_destroy(client);
     ttl_event_free(NULL);ttl_batch_free(NULL);ttl_string_free(NULL);

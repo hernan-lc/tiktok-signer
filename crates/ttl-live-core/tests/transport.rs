@@ -12,10 +12,17 @@ impl SocketSigner for Signer {
     }
 }
 struct Sink {
+    metrics: Arc<Mutex<(u64, u64)>>,
     events: Arc<Mutex<Vec<String>>>,
     stop: watch::Sender<bool>,
 }
 impl LiveSink for Sink {
+    fn on_decode_duration(&self, _: Duration) {
+        self.metrics.lock().unwrap().0 += 1;
+    }
+    fn on_ack_duration(&self, _: Duration) {
+        self.metrics.lock().unwrap().1 += 1;
+    }
     fn on_state(&self, _: State, _: &str) {}
     fn on_error(&self, _: Error, _: bool) {}
     fn on_batch(&self, b: ttl_live_events::EventBatch) {
@@ -87,6 +94,7 @@ async fn actual_websocket_delivers_all_methods_and_stops_without_callbacks_after
     let (stop, rx) = watch::channel(false);
     let events = Arc::new(Mutex::new(Vec::new()));
     let sink = Sink {
+        metrics: Arc::new(Mutex::new((0, 0))),
         events: events.clone(),
         stop,
     };
@@ -104,6 +112,7 @@ async fn actual_websocket_delivers_all_methods_and_stops_without_callbacks_after
     )
     .await
     .unwrap();
+    assert_eq!(*sink.metrics.lock().unwrap(), (1, 1));
     assert_eq!(
         *events.lock().unwrap(),
         [
@@ -128,6 +137,7 @@ async fn cancellation_interrupts_pending_signer() {
     }
     let (stop, rx) = watch::channel(false);
     let sink = Sink {
+        metrics: Arc::new(Mutex::new((0, 0))),
         events: Arc::new(Mutex::new(Vec::new())),
         stop: stop.clone(),
     };

@@ -65,12 +65,66 @@ struct Dispatch {
     capacity: usize,
     sender: Option<tokio::sync::mpsc::Sender<Delivery>>,
 }
+const DURATION_BUCKET_MICROS: [u64; 12] = [
+    50, 100, 250, 500, 1000, 5000, 10000, 50000, 100000, 1000000, 5000000, 30000000,
+];
+struct DurationMetric {
+    count: AtomicU64,
+    nanos: AtomicU64,
+    buckets: [AtomicU64; 12],
+}
+impl Default for DurationMetric {
+    fn default() -> Self {
+        Self {
+            count: AtomicU64::new(0),
+            nanos: AtomicU64::new(0),
+            buckets: std::array::from_fn(|_| AtomicU64::new(0)),
+        }
+    }
+}
+impl DurationMetric {
+    fn observe(&self, duration: std::time::Duration) {
+        self.count.fetch_add(1, Ordering::Relaxed);
+        self.nanos.fetch_add(
+            duration.as_nanos().min(u64::MAX as u128) as u64,
+            Ordering::Relaxed,
+        );
+        for (index, ceiling) in DURATION_BUCKET_MICROS.iter().enumerate() {
+            if duration.as_micros() <= u128::from(*ceiling) {
+                self.buckets[index].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+    fn render(&self, name: &str, output: &mut String) {
+        use std::fmt::Write;
+        let _ = writeln!(output, "# TYPE {name} histogram");
+        for (index, ceiling) in DURATION_BUCKET_MICROS.iter().enumerate() {
+            let _ = writeln!(
+                output,
+                "{name}_bucket{{le=\"{}\"}} {}",
+                *ceiling as f64 / 1e6,
+                self.buckets[index].load(Ordering::Relaxed)
+            );
+        }
+        let count = self.count.load(Ordering::Relaxed);
+        let _ = writeln!(
+            output,
+            "{name}_bucket{{le=\"+Inf\"}} {count}\n{name}_count {count}\n{name}_sum {}",
+            self.nanos.load(Ordering::Relaxed) as f64 / 1e9
+        );
+    }
+}
 struct Shared {
     callbacks: Mutex<Callbacks>,
     idle: Condvar,
     dispatch: Mutex<Dispatch>,
     stop: Mutex<Option<watch::Sender<bool>>>,
     overloaded: AtomicBool,
+    active_connections: AtomicU64,
+    reconnects: AtomicU64,
+    decode_duration: DurationMetric,
+    ack_duration: DurationMetric,
+    callback_duration: DurationMetric,
     received: AtomicU64,
     dispatched: AtomicU64,
     discarded: AtomicU64,
@@ -105,7 +159,9 @@ impl Shared {
             cb
         };
         let _invocation = Invocation(self);
+        let started = std::time::Instant::now();
         f(selected);
+        self.callback_duration.observe(started.elapsed());
         true
     }
     fn on_worker(&self) -> bool {
@@ -238,7 +294,26 @@ impl Shared {
     }
 }
 impl LiveSink for Shared {
+    fn on_decode_duration(&self, duration: std::time::Duration) {
+        self.decode_duration.observe(duration);
+    }
+    fn on_ack_duration(&self, duration: std::time::Duration) {
+        self.ack_duration.observe(duration);
+    }
     fn on_state(&self, state: State, detail: &str) {
+        match state {
+            State::Connected => {
+                self.active_connections.store(1, Ordering::Relaxed);
+            }
+            State::Reconnecting => {
+                self.active_connections.store(0, Ordering::Relaxed);
+                self.reconnects.fetch_add(1, Ordering::Relaxed);
+            }
+            State::Disconnected | State::Offline | State::Error => {
+                self.active_connections.store(0, Ordering::Relaxed);
+            }
+            State::Connecting => (),
+        }
         if let Some(Delivery::State(state, detail)) =
             self.enqueue(Delivery::State(state, detail.into()))
         {
@@ -447,6 +522,11 @@ pub unsafe extern "C" fn ttl_live_client_create(options: *const LiveOptions) -> 
                 dispatch: Mutex::new(Dispatch::default()),
                 stop: Mutex::new(None),
                 overloaded: AtomicBool::new(false),
+                active_connections: AtomicU64::new(0),
+                reconnects: AtomicU64::new(0),
+                decode_duration: DurationMetric::default(),
+                ack_duration: DurationMetric::default(),
+                callback_duration: DurationMetric::default(),
                 received: AtomicU64::new(0),
                 dispatched: AtomicU64::new(0),
                 discarded: AtomicU64::new(0),
@@ -704,6 +784,70 @@ pub unsafe extern "C" fn ttl_live_client_delivery_metrics(
     })
 }
 
+/// Owned Prometheus text: release with ttl_string_free. No identity or room labels.
+#[no_mangle]
+pub unsafe extern "C" fn ttl_live_client_metrics_prometheus(
+    client: *const NativeClient,
+) -> *mut c_char {
+    super::guard(ptr::null_mut(), || {
+        use std::fmt::Write;
+        let Some(client) = client.as_ref() else {
+            return ptr::null_mut();
+        };
+        let shared = &client.shared;
+        let depth = lock(&shared.dispatch)
+            .sender
+            .as_ref()
+            .map_or(0, |s| s.max_capacity() - s.capacity());
+        let mut output = String::new();
+        for (name, value, kind) in [
+            (
+                "active_live_connections",
+                shared.active_connections.load(Ordering::Relaxed),
+                "gauge",
+            ),
+            (
+                "live_events_received_total",
+                shared.received.load(Ordering::Relaxed),
+                "counter",
+            ),
+            (
+                "live_events_dispatched_total",
+                shared.dispatched.load(Ordering::Relaxed),
+                "counter",
+            ),
+            (
+                "live_events_dropped_total",
+                shared.discarded.load(Ordering::Relaxed),
+                "counter",
+            ),
+            ("live_event_queue_depth", depth as u64, "gauge"),
+            (
+                "live_event_queue_rejections_total",
+                shared.rejections.load(Ordering::Relaxed),
+                "counter",
+            ),
+            (
+                "websocket_reconnects_total",
+                shared.reconnects.load(Ordering::Relaxed),
+                "counter",
+            ),
+        ] {
+            let _ = writeln!(output, "# TYPE {name} {kind}\n{name} {value}");
+        }
+        shared
+            .decode_duration
+            .render("live_decode_duration_seconds", &mut output);
+        shared
+            .ack_duration
+            .render("websocket_ack_duration_seconds", &mut output);
+        shared
+            .callback_duration
+            .render("live_callback_duration_seconds", &mut output);
+        cstring(&output).into_raw()
+    })
+}
+
 macro_rules! callback {
     ($name:ident,$field:ident,$ty:ty) => {
         #[no_mangle]
@@ -812,6 +956,29 @@ mod tests {
         ttl_string_free(json);
         ttl_event_free(clone);
     }
+    #[test]
+    fn owned_metrics_text_reports_bounded_histograms() {
+        unsafe {
+            let client = ttl_live_client_create(&options());
+            assert!(!client.is_null());
+            (*client)
+                .shared
+                .on_decode_duration(std::time::Duration::from_millis(2));
+            (*client)
+                .shared
+                .on_ack_duration(std::time::Duration::from_millis(1));
+            let text = ttl_live_client_metrics_prometheus(client);
+            assert!(!text.is_null());
+            let rendered = std::ffi::CStr::from_ptr(text).to_str().unwrap();
+            assert!(rendered.contains("live_decode_duration_seconds_count 1"));
+            assert!(rendered.contains("websocket_ack_duration_seconds_bucket{le=\"0.001\"} 1"));
+            assert!(rendered.contains("live_events_received_total 0"));
+            assert!(!rendered.contains("room_id"));
+            ttl_string_free(text);
+            ttl_live_client_destroy(client);
+        }
+    }
+
     #[test]
     fn repeated_shutdown_multiple_clients_and_clones_are_quiescent() {
         unsafe {

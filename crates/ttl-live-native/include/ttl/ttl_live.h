@@ -73,5 +73,7 @@ typedef struct ttl_delivery_metrics {
     uint64_t queue_rejections;
 } ttl_delivery_metrics_t;
 TTL_API bool ttl_live_client_delivery_metrics(const ttl_live_client_t *client, ttl_delivery_metrics_t *out);
+/* Owned label-free Prometheus counters/histograms. Release with ttl_string_free. */
+TTL_API char *ttl_live_client_metrics_prometheus(const ttl_live_client_t *client);
 TTL_END
 #endif

@@ -117,6 +117,7 @@ pub struct LiveConnection {
     internal_ext: String,
     room_id: u64,
     heartbeat_sequence: u64,
+    last_ack_duration: Duration,
     heartbeat: tokio::time::Interval,
     /// Options returned by the server in `Handshake-Options`, useful for diagnostics.
     handshake_options: Vec<(String, String)>,
@@ -288,6 +289,7 @@ impl LiveConnection {
             internal_ext: internal_ext.to_string(),
             room_id,
             heartbeat_sequence: INITIAL_HEARTBEAT_SEQUENCE,
+            last_ack_duration: Duration::ZERO,
             heartbeat,
             handshake_options,
             uri,
@@ -310,6 +312,11 @@ impl LiveConnection {
     /// returned. Acks and heartbeats are sent automatically.
     ///
     /// Returns `None` when the connection closes cleanly.
+    /// Duration of the most recent ACK write attempt.
+    pub fn last_ack_duration(&self) -> Duration {
+        self.last_ack_duration
+    }
+
     pub async fn next_message(&mut self) -> Option<Result<LiveMessage, WsError>> {
         loop {
             tokio::select! {
@@ -373,9 +380,11 @@ impl LiveConnection {
         self.internal_ext.clear();
         self.internal_ext.push_str(extension);
         let ack = frame.ack(&self.internal_ext);
+        let ack_started = std::time::Instant::now();
         if let Err(e) = self.stream.send(WsMessage::Binary(ack.encode())).await {
             warn!(error = %e, "could not send ack");
         }
+        self.last_ack_duration = ack_started.elapsed();
 
         Ok(Some(LiveMessage {
             log_id: frame.log_id,
