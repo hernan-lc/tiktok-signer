@@ -71,8 +71,15 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.88'
+      - name: Build host JNI library for offline ownership tests
+        run: cargo build -p ttl-sign-mobile --features jni,live
       - name: Build Java SDK and examples; run offline parity and lifecycle tests
         working-directory: sdk/java
+        env:
+          TTL_NATIVE_LIBRARY: ${{ github.workspace }}/target/debug/libttl_sign_mobile.so
         run: ./gradlew build publishToMavenLocal --console=plain
 
   android:

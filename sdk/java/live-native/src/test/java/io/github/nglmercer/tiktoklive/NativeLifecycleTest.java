@@ -11,9 +11,11 @@ class NativeLifecycleTest {
     void realJniRepeatedCreateSignCloseAndConcurrentClose() throws Exception {
         String library = System.getenv("TTL_NATIVE_LIBRARY");
         String bundlePath = System.getenv("TTL_BUNDLE");
-        assumeTrue(library != null && bundlePath != null, "local JNI library and verified bundle required");
+        assumeTrue(library != null, "local JNI library required");
         System.setProperty("tiktok.live.native.library", library);
-        String bundle = Files.readString(Path.of(bundlePath));
+        String bundle = bundlePath == null
+                ? "window.byted_acrawler = { init: function() {}, registerWsSigner: function() { return function() { return {\"X-Gnarly\": \"offline\"}; }; } };"
+                : Files.readString(Path.of(bundlePath));
         for (int cycle = 0; cycle < 20; cycle++) {
             var signer = TikTokSigner.open(bundle, "{}");
             assertTrue(signer.sign("https://example.invalid/?room_id=7300", SignProduct.WS).contains("X-Gnarly="));
