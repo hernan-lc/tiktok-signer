@@ -339,7 +339,7 @@ impl LiveConnection {
 
     /// Process a frame. Returns `Some` only for event frames.
     async fn handle_frame(&mut self, bytes: &[u8]) -> Result<Option<LiveMessage>, WsError> {
-        let frame = PushFrame::decode(bytes).map_err(|e| WsError::Decode(e.to_string()))?;
+        let mut frame = PushFrame::decode(bytes).map_err(|e| WsError::Decode(e.to_string()))?;
 
         if !frame.is_message() {
             debug!(payload_type = %frame.payload_type, "transport frame discarded");
@@ -347,17 +347,22 @@ impl LiveConnection {
         }
 
         let payload = match frame.compress_type() {
-            None | Some("") | Some("none") => frame.payload.clone(),
+            None | Some("") | Some("none") => std::mem::take(&mut frame.payload),
             Some("gzip") => gunzip(&frame.payload)?,
             Some(other) => {
                 // A new value here means TikTok changed the protocol. Report it and try
                 // the raw payload, which is the only possible fallback.
                 error!(compress_type = %other, "unknown compression; trying raw payload");
-                frame.payload.clone()
+                std::mem::take(&mut frame.payload)
             }
         };
 
-        // Send the ack after processing, using the received frame's log_id.
+        // Read only borrowed transport fields; application decoding happens after ACK.
+        // Keep acknowledging every msg frame: existing player compatibility fixtures
+        // do not establish that need_ack=false disables WebSocket acknowledgement.
+        let extension = batch_internal_ext(&payload)?;
+        self.internal_ext.clear();
+        self.internal_ext.push_str(extension);
         let ack = frame.ack(&self.internal_ext);
         if let Err(e) = self.stream.send(WsMessage::Binary(ack.encode())).await {
             warn!(error = %e, "could not send ack");
@@ -426,6 +431,26 @@ fn parse_handshake_options(raw: &str) -> Vec<(String, String)> {
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect()
+}
+
+/// Last field wins, matching protobuf scalar semantics; never reuse a previous batch's extension.
+fn batch_internal_ext(payload: &[u8]) -> Result<&str, WsError> {
+    use ttl_sign_core::proto::{Reader, WireValue};
+    let mut extension = "";
+    let mut reader = Reader::new(payload);
+    while let Some(field) = reader.next_field() {
+        let (number, value) = field.map_err(|e| WsError::Decode(e.to_string()))?;
+        if number == 5 {
+            match value {
+                WireValue::Bytes(bytes) => {
+                    extension =
+                        std::str::from_utf8(bytes).map_err(|e| WsError::Decode(e.to_string()))?;
+                }
+                _ => return Err(WsError::Decode("invalid internal_ext wire type".into())),
+            }
+        }
+    }
+    Ok(extension)
 }
 
 fn gunzip(data: &[u8]) -> Result<Vec<u8>, WsError> {
@@ -499,6 +524,23 @@ mod tests {
                 ("ping_interval".to_string(), "10".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn ack_extension_matches_sanitized_capture_and_changes_per_batch() {
+        let capture = include_bytes!("../../../fixtures/events/batch.pb");
+        assert_eq!(
+            batch_internal_ext(capture).unwrap(),
+            "redacted-internal-ext"
+        );
+        let metadata = FetchResult::decode(capture).unwrap();
+        assert_eq!(batch_internal_ext(capture).unwrap(), metadata.internal_ext);
+        let mut batch = ttl_sign_core::proto::Writer::new();
+        batch.str_field(5, "old").str_field(5, "new");
+        assert_eq!(batch_internal_ext(&batch.finish()).unwrap(), "new");
+        assert_eq!(batch_internal_ext(&[]).unwrap(), "");
+        assert!(batch_internal_ext(&[0xff]).is_err());
+        assert!(batch_internal_ext(&[0x28, 1]).is_err());
     }
 
     #[test]

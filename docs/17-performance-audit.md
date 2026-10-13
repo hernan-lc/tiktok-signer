@@ -75,3 +75,15 @@ parity and package all-target Clippy passed. First normalized sample: 195,600
 events/s, batch p50/p95/p99 57,589 / 90,151 / 100,037 ns. This mode does less work;
 it is not a claim of that speedup for legacy full consumers. Allocation counts
 and sustained RSS still require measurement.
+
+## Rust transport changes
+
+ACK extension now comes from each decompressed batch using borrowed wire metadata,
+not the initial fetch response. An absent extension clears old state and retains
+the existing `-` ACK fallback. Duplicate scalar fields use protobuf last-value
+semantics. Uncompressed frame payloads transfer ownership. Existing ACK frequency
+is unchanged: the captured fixture is an initial HTTP fetch, not evidence that
+WebSocket need_ack=false disables ACKs. That protocol verification remains open.
+The regression compares the redacted real batch with FetchResult decoding and
+checks changed/empty/malformed extensions. All 10 transport tests and all-target
+Clippy passed. Local-socket ACK/heartbeat/cancellation stress is still pending.
