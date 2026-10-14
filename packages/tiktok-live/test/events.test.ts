@@ -115,3 +115,13 @@ test('a missing user is a blank user, not a crash', () => {
 function user(uniqueId: string, nickname = '') {
   return create(UserSchema, { id: USER_ID, nickname, displayId: uniqueId });
 }
+
+
+test('prototype property names are unknown methods and preserve their exact payload', () => {
+  const payload = Uint8Array.from([8, 1]);
+  for (const method of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+    const event = decodeEvent(method, payload);
+    assert.equal(event.type, 'unknown');
+    if (event.type === 'unknown') { assert.equal(event.method, method); assert.equal(event.payload, payload); }
+  }
+});

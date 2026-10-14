@@ -21,7 +21,7 @@ class AppContainer(context: Context) {
     val database = DatabaseFactory.open(this.context)
     val points = PointsRepository(database, preferences, scope)
     val actions = ActionsRepository(database, scope)
-    val events = EventsRepository()
+    val events = EventsRepository(scope)
     val tts = TtsRepository(this.context, preferences, scope)
     val discovery = DiscoveryRepository()
     val live =

@@ -130,4 +130,21 @@ class LiveSessionManagerTest {
         assertEquals(2, events.size)
         manager.close()
     }
+    @Test
+    fun stalledBusinessConsumerStopsSessionOnOverflow() = runTest {
+        val socket = Socket()
+        val manager = LiveSessionManager(Discovery(), socket, Hold(), this)
+        val gate = CompletableDeferred<Unit>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            manager.events.collect { gate.await() }
+        }
+        manager.connect("creator")
+        runCurrent()
+        repeat(1000) { socket.listener.onEvent("{\"type\":\"gift\"}") }
+        runCurrent()
+        assertTrue(manager.state.value is LiveSessionState.Failed)
+        assertEquals(1, socket.closed)
+        gate.complete(Unit)
+        manager.close()
+    }
 }

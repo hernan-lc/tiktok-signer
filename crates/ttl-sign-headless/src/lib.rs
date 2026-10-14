@@ -194,13 +194,39 @@ impl HeadlessBackend {
             Err(error) => return SignOutcome::Transport(SignError::Transport(error.to_string())),
         };
         let status = response.status().as_u16();
-        let body = match response.bytes().await {
-            Ok(bytes) => bytes.to_vec(),
-            Err(error) => return SignOutcome::Transport(SignError::Transport(error.to_string())),
+        let body = match read_fetch_body(response, 16 * 1024 * 1024).await {
+            Ok(bytes) => bytes,
+            Err(error) => return SignOutcome::Transport(error),
         };
 
         build_outcome(status, &signed, body, self.session.clone(), &self.preset)
     }
+}
+
+async fn read_fetch_body(
+    mut response: reqwest::Response,
+    limit: usize,
+) -> Result<Vec<u8>, SignError> {
+    let too_large =
+        || SignError::Transport(format!("initial fetch response exceeds {limit} bytes"));
+    if response
+        .content_length()
+        .is_some_and(|size| size > limit as u64)
+    {
+        return Err(too_large());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| SignError::Transport(e.to_string()))?
+    {
+        if chunk.len() > limit.saturating_sub(body.len()) {
+            return Err(too_large());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 /// Heartbeat the synthesized result advertises, matching the query it was built from.
@@ -355,6 +381,24 @@ pub const TRANSPORT_PATH: &str = WS_REUSE_PATH;
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn initial_chunked_fetch_is_bounded() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = [0; 4096];
+            assert!(socket.read(&mut request).unwrap() > 0);
+            socket.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n8\r\n12345678\r\n8\r\nabcdefgh\r\n0\r\n\r\n").unwrap();
+        });
+        let response = reqwest::get(format!("http://{address}/")).await.unwrap();
+        assert!(
+            matches!(read_fetch_body(response, 12).await, Err(SignError::Transport(message)) if message.contains("exceeds 12"))
+        );
+        server.join().unwrap();
+    }
+
     use super::*;
     use ttl_live_discovery::SignFuture;
 

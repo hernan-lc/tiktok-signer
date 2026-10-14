@@ -12,6 +12,10 @@ pub struct AppConfig {
     pub max_concurrent_signs: usize,
     pub max_concurrent_discovery: usize,
     pub max_concurrent_requests: usize,
+    pub max_active_relays: usize,
+    pub max_relays_per_customer: usize,
+    pub relay_idle_timeout: Duration,
+    pub relay_write_timeout: Duration,
     pub room_cache_ttl: Duration,
     pub offline_cache_ttl: Duration,
     pub not_found_cache_ttl: Duration,
@@ -33,6 +37,10 @@ impl Default for AppConfig {
             max_concurrent_signs: 32,
             max_concurrent_discovery: 64,
             max_concurrent_requests: 256,
+            max_active_relays: 1024,
+            max_relays_per_customer: 32,
+            relay_idle_timeout: Duration::from_secs(60),
+            relay_write_timeout: Duration::from_secs(15),
             room_cache_ttl: Duration::from_secs(30),
             offline_cache_ttl: Duration::from_secs(15),
             not_found_cache_ttl: Duration::from_secs(45),
@@ -62,6 +70,26 @@ impl AppConfig {
             max_concurrent_requests: env_usize(
                 "MAX_CONCURRENT_REQUESTS",
                 defaults.max_concurrent_requests,
+            ),
+            max_active_relays: env_usize("MAX_ACTIVE_RELAYS", defaults.max_active_relays).max(1),
+            max_relays_per_customer: env_usize(
+                "MAX_RELAYS_PER_CUSTOMER",
+                defaults.max_relays_per_customer,
+            )
+            .max(1),
+            relay_idle_timeout: Duration::from_secs(
+                env_u64(
+                    "RELAY_IDLE_TIMEOUT_SECONDS",
+                    defaults.relay_idle_timeout.as_secs(),
+                )
+                .max(1),
+            ),
+            relay_write_timeout: Duration::from_secs(
+                env_u64(
+                    "RELAY_WRITE_TIMEOUT_SECONDS",
+                    defaults.relay_write_timeout.as_secs(),
+                )
+                .max(1),
             ),
             room_cache_ttl: Duration::from_secs(env_u64(
                 "ROOM_CACHE_TTL_SECONDS",

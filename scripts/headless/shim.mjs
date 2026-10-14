@@ -72,8 +72,10 @@ function hostRandomValues(array) {
 
 export function createSandbox() {
 const accesses = new Map();
+  let omittedAccesses = 0;
   const record = (path, op, value) => {
     const key = `${path}|${op}`;
+    if (!accesses.has(key) && accesses.size >= 4096) { omittedAccesses++; return; }
     const seen = accesses.get(key) || { path, op, gets: 0, type: typeof value, missing: value === undefined };
     seen.gets++;
     accesses.set(key, seen);
@@ -287,6 +289,7 @@ const accesses = new Map();
   
   
   return { sandbox, windowTarget, accesses,
+    get omittedAccesses() { return omittedAccesses; },
     view, record,
     load(source) {
       try { new Function('__sandbox', `with(__sandbox){ ${source} \n}`)(sandbox); return null; }

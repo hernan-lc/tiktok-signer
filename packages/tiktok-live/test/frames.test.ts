@@ -6,7 +6,10 @@ import { gzipSync } from 'node:zlib';
 
 import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
 import {
+  sendBoundedFrame,
+  writeBufferLimit,
   ackFrame,
+  ackFrameForBatch,
   carriesEvents,
   decodeBatch,
   decodePushFrame,
@@ -157,4 +160,64 @@ test('the generated heartbeat frame preserves the exact room id', () => {
 test('frame encoders reject negative integer values', () => {
   assert.throws(() => pushFrame('ack', '-', { logId: -1n }), /non-negative/);
   assert.throws(() => heartbeatFrame('-1'), /non-negative/);
+});
+
+test('gzip bombs and oversized raw inputs are bounded before protobuf allocations', () => {
+  const oversized = Buffer.alloc(16 * 1024 * 1024 + 1);
+  const frame = create(WebcastPushFrameSchema, {
+    headers: [create(PushHeaderSchema, { key: 'compress_type', value: 'gzip' })],
+    payload: gzipSync(oversized),
+  });
+  assert.throws(() => decompress(frame), /larger than|size|length/i);
+  assert.throws(() => decodePushFrame(oversized), /frame exceeds/);
+  assert.throws(() => decodeBatch(oversized), /batch exceeds/);
+  assert.throws(() => decompress(create(WebcastPushFrameSchema, { payload: oversized })), /payload exceeds/);
+});
+
+test('batch message count is checked before generated repeated-message allocation', () => {
+  // Empty length-delimited messages are valid protobuf and exercise the preflight cap.
+  const allowed = Buffer.alloc(8192 * 2);
+  for (let i = 0; i < allowed.length; i += 2) allowed[i] = 10;
+  assert.equal(decodeBatch(allowed).messages.length, 8192);
+  assert.throws(() => decodeBatch(Buffer.concat([allowed, Buffer.from([10, 0])])), /8192 messages/);
+  for (const malformed of [[10, 255], [10, 5, 0], [8, 1], [15], [18, 128]]) {
+    assert.throws(() => decodeBatch(Uint8Array.from(malformed)));
+  }
+});
+
+test('player per-batch ACK leaves an empty extension empty while legacy helper stays compatible', () => {
+  const incoming = create(WebcastPushFrameSchema, { logId: 44n });
+  const ack = decodePushFrame(ackFrameForBatch(incoming, ''));
+  assert.equal(ack.logId, 44n);
+  assert.equal(ack.payloadType, 'ack');
+  assert.equal(ack.payload.length, 0);
+  assert.equal(Buffer.from(decodePushFrame(ackFrame(incoming, '')).payload).toString(), '-');
+});
+
+test('per-batch ACK bytes match the shared public-player reference fixture', async () => {
+  const { readFileSync } = await import('node:fs');
+  const fixture = JSON.parse(readFileSync(new URL('../../../fixtures/research/player-ack-protocol-v1.json', import.meta.url), 'utf8')) as {
+    synthetic_cases: Array<{ need_ack: boolean; extension: string; log_id: number; send_ack: boolean; ack_hex: string | null }>;
+  };
+  for (const item of fixture.synthetic_cases) {
+    const batch = decodeBatch(toBinary(ProtoMessageFetchResultSchema, create(ProtoMessageFetchResultSchema, {
+      needAck: item.need_ack, internalExt: item.extension,
+    })));
+    assert.equal(batch.needAck, item.send_ack);
+    if (batch.needAck) {
+      const frame = create(WebcastPushFrameSchema, { logId: BigInt(item.log_id) });
+      assert.equal(ackFrameForBatch(frame, batch.internalExt).toString('hex'), item.ack_hex);
+    }
+  }
+});
+
+test('write buffer preflight accounts for pending bytes and rejects before sending', () => {
+  let sent = 0;
+  const socket = { bufferedAmount: 8, send() { sent++; } } as unknown as import('../dist/types.js').WebSocketLike;
+  sendBoundedFrame(socket, new Uint8Array(4), 12);
+  assert.equal(sent, 1);
+  assert.throws(() => sendBoundedFrame(socket, new Uint8Array(5), 12), /write buffer/);
+  assert.equal(sent, 1);
+  assert.throws(() => writeBufferLimit(Infinity), /maxBufferedBytes/);
+  assert.throws(() => writeBufferLimit(0), /maxBufferedBytes/);
 });

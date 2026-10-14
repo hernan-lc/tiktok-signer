@@ -11,4 +11,8 @@ fuzz_target!(|data: &[u8]| {
         let _ = e.to_json(JsonMode::Full);
     }
     let _ = ttl_live_events::decode_batch(data);
+    for mode in [ttl_live_events::DecodeMode::Raw, ttl_live_events::DecodeMode::Normalized,
+        ttl_live_events::DecodeMode::Schema, ttl_live_events::DecodeMode::Full] {
+        let _ = ttl_live_events::decode_batch_with_mode(data, mode);
+    }
 });

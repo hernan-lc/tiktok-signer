@@ -25,6 +25,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
+import { readResponseText } from './http.js';
 import { USER_AGENT } from './session.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -41,11 +42,18 @@ export const BUNDLE_SHA256 = 'dee22566273d398e074df6db40f39cfd827f6b8efd6fc382de
 
 const VM_TIMEOUT_MS = 10_000;
 
+// One immutable compiled bootstrap, run against a fresh context for every identity.
+let bootstrapScript: vm.Script | undefined;
+function bootstrap(): vm.Script {
+  return bootstrapScript ??= new vm.Script(fs.readFileSync(BOOTSTRAP_PATH, 'utf8'), { filename: BOOTSTRAP_PATH });
+}
+
 /// Which signature to produce. The socket verifies `ws` and ignores the other two.
 export const PRODUCT = Object.freeze({ fetch: 'fetch', frontier: 'frontier', ws: 'ws' } as const);
 export type Product = (typeof PRODUCT)[keyof typeof PRODUCT];
 
 export interface LoadBundleOptions {
+  timeoutMs?: number;
   url?: string;
   cachePath?: string;
   maxAgeMs?: number;
@@ -67,37 +75,55 @@ export interface SignerOptions {
 /// Downloading is what a browser does, and it keeps the library to `npm install` with no manual
 /// step. A cached copy is reused for `maxAgeMs` so a reconnect loop cannot turn into a download
 /// loop; pass `bundlePath` or `bundleSource` to the signer to skip this entirely.
-export async function loadBundle({
+const bundleFlights = new Map<string, Promise<string>>();
+export function loadBundle(options: LoadBundleOptions = {}): Promise<string> {
+  const key = JSON.stringify([
+    options.url ?? BUNDLE_URL,
+    options.cachePath ?? path.join(os.tmpdir(), 'ttl-webmssdk.js'),
+    options.maxAgeMs ?? 24 * 60 * 60 * 1000,
+    options.timeoutMs ?? 30_000,
+    options.expectedSha256 ?? (options.url === undefined || options.url === BUNDLE_URL ? BUNDLE_SHA256 : null),
+  ]);
+  const existing = bundleFlights.get(key);
+  if (existing) return existing;
+  if (bundleFlights.size >= 16) return Promise.reject(new Error('signing bundle download capacity exhausted'));
+  const flight = readBundle(options).finally(() => { bundleFlights.delete(key); });
+  bundleFlights.set(key, flight);
+  return flight;
+}
+
+async function readBundle({
+  timeoutMs = 30_000,
   url = BUNDLE_URL,
   cachePath = path.join(os.tmpdir(), 'ttl-webmssdk.js'),
   maxAgeMs = 24 * 60 * 60 * 1000,
   expectedSha256 = url === BUNDLE_URL ? BUNDLE_SHA256 : undefined,
 }: LoadBundleOptions = {}): Promise<string> {
   try {
-    const stat = fs.statSync(cachePath);
+    const stat = await fs.promises.stat(cachePath);
     if (Date.now() - stat.mtimeMs < maxAgeMs && stat.size > 0) {
-      const cached = fs.readFileSync(cachePath, 'utf8');
+      const cached = await fs.promises.readFile(cachePath, 'utf8');
       if (matchesDigest(cached, expectedSha256)) return cached;
     }
   } catch {
     // No cache yet.
   }
-  const response = await fetch(url);
+  const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
   if (!response.ok) {
     throw new Error(`could not download the signing bundle: HTTP ${response.status} from ${url}`);
   }
-  const source = await response.text();
+  const source = await readResponseText(response, 8 * 1024 * 1024);
   if (!matchesDigest(source, expectedSha256)) {
     throw new Error(`the signing bundle from ${url} did not match its expected SHA-256`);
   }
   const temporary = `${cachePath}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    fs.writeFileSync(temporary, source, { mode: 0o600 });
-    fs.renameSync(temporary, cachePath);
+    await fs.promises.writeFile(temporary, source, { mode: 0o600 });
+    await fs.promises.rename(temporary, cachePath);
   } catch {
     // A read-only temp directory is not a reason to fail a signature.
     try {
-      fs.rmSync(temporary, { force: true });
+      await fs.promises.rm(temporary, { force: true });
     } catch {
       // Nothing was written.
     }
@@ -133,10 +159,10 @@ export class Signer {
   }: SignerOptions = {}): Promise<Signer> {
     const source =
       bundleSource ??
-      (bundlePath ? fs.readFileSync(bundlePath, 'utf8') : await loadBundle({ url: bundleUrl }));
+      (bundlePath ? await fs.promises.readFile(bundlePath, 'utf8') : await loadBundle({ url: bundleUrl }));
 
     const context = vm.createContext({});
-    vm.runInContext(fs.readFileSync(BOOTSTRAP_PATH, 'utf8'), context, { timeout: VM_TIMEOUT_MS });
+    bootstrap().runInContext(context, { timeout: VM_TIMEOUT_MS });
 
     const options: { pinned: boolean; userAgent: string; cookie: string; xmst?: string } = {
       pinned,

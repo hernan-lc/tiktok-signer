@@ -160,13 +160,14 @@ pub enum MobileError {
 
 /// A signature request for the worker thread.
 struct Request {
+    deadline: std::time::Instant,
     url: String,
     product: Product,
     reply: Reply,
 }
 
 enum Reply {
-    Blocking(mpsc::Sender<Result<String, MobileError>>),
+    Blocking(mpsc::SyncSender<Result<String, MobileError>>),
     #[cfg(feature = "live")]
     Async(tokio::sync::oneshot::Sender<Result<String, MobileError>>),
 }
@@ -176,7 +177,9 @@ enum Reply {
 /// Blocking by design: JNI calls block, so there is no async runtime here at all —
 /// `ttl-sign-embedded`'s `tokio::sync::oneshot` becomes a `std::sync::mpsc` channel.
 pub struct MobileSigner {
-    requests: mpsc::Sender<Request>,
+    requests: Option<mpsc::SyncSender<Request>>,
+    worker: Option<thread::JoinHandle<()>>,
+    stopping: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl MobileSigner {
@@ -185,44 +188,103 @@ impl MobileSigner {
     /// Returns once the bundle is loaded and `byted_acrawler.init` has run, so a
     /// constructed signer is a working one. `options_json` is a [`SignOptions`] object.
     pub fn new(bundle: &str, options_json: &str) -> Result<Self, MobileError> {
+        Self::with_capacity(bundle, options_json, 64)
+    }
+    /// Bound waiting work. Submissions reject overload; neither API waits for queue space.
+    pub fn with_capacity(
+        bundle: &str,
+        options_json: &str,
+        capacity: usize,
+    ) -> Result<Self, MobileError> {
+        if capacity == 0 || capacity > 65_536 {
+            return Err(MobileError::Options(
+                "queue capacity must be 1..65536".into(),
+            ));
+        }
         let options = SignOptions::from_json(options_json)?.to_driver_json();
         let bundle = bundle.to_string();
-        let (requests, incoming) = mpsc::channel::<Request>();
-        let (ready, started) = mpsc::channel::<Result<(), MobileError>>();
+        let (requests, incoming) = mpsc::sync_channel::<Request>(capacity);
+        let (ready, started) = mpsc::sync_channel::<Result<(), MobileError>>(1);
 
-        thread::Builder::new()
+        let stopping = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_stopping = stopping.clone();
+        let worker = thread::Builder::new()
             .name("ttl-sign-mobile".into())
-            .spawn(move || worker(bundle, options, ready, incoming))
+            .spawn(move || worker(bundle, options, ready, incoming, worker_stopping))
             .map_err(|e| MobileError::Engine(e.to_string()))?;
 
-        started.recv().map_err(|_| MobileError::Stopped)??;
-        Ok(Self { requests })
+        if let Err(error) = started
+            .recv()
+            .map_err(|_| MobileError::Stopped)
+            .and_then(|result| result)
+        {
+            let _ = worker.join();
+            return Err(error);
+        }
+        Ok(Self {
+            requests: Some(requests),
+            worker: Some(worker),
+            stopping,
+        })
     }
 
     /// Sign one URL. Blocks until the worker answers.
     pub fn sign(&self, url: &str, product: Product) -> Result<String, MobileError> {
-        let (reply, answer) = mpsc::channel();
+        let (reply, answer) = mpsc::sync_channel(1);
         self.requests
-            .send(Request {
+            .as_ref()
+            .ok_or(MobileError::Stopped)?
+            .try_send(Request {
+                deadline: std::time::Instant::now() + std::time::Duration::from_secs(30),
                 url: url.to_string(),
                 product,
                 reply: Reply::Blocking(reply),
             })
-            .map_err(|_| MobileError::Stopped)?;
-        answer.recv().map_err(|_| MobileError::Stopped)?
+            .map_err(queue_error)?;
+        answer
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .map_err(|e| match e {
+                mpsc::RecvTimeoutError::Timeout => {
+                    MobileError::Sign("signing request timed out".into())
+                }
+                mpsc::RecvTimeoutError::Disconnected => MobileError::Stopped,
+            })?
     }
     /// Live worker variant: cancelling the wait never blocks runtime shutdown.
     #[cfg(feature = "live")]
     pub async fn sign_async(&self, url: &str, product: Product) -> Result<String, MobileError> {
         let (reply, answer) = tokio::sync::oneshot::channel();
         self.requests
-            .send(Request {
+            .as_ref()
+            .ok_or(MobileError::Stopped)?
+            .try_send(Request {
+                deadline: std::time::Instant::now() + std::time::Duration::from_secs(30),
                 url: url.to_owned(),
                 product,
                 reply: Reply::Async(reply),
             })
-            .map_err(|_| MobileError::Stopped)?;
-        answer.await.map_err(|_| MobileError::Stopped)?
+            .map_err(queue_error)?;
+        tokio::time::timeout(std::time::Duration::from_secs(30), answer)
+            .await
+            .map_err(|_| MobileError::Sign("signing request timed out".into()))?
+            .map_err(|_| MobileError::Stopped)?
+    }
+}
+
+fn queue_error(error: mpsc::TrySendError<Request>) -> MobileError {
+    match error {
+        mpsc::TrySendError::Full(_) => MobileError::Sign("signer request queue is full".into()),
+        mpsc::TrySendError::Disconnected(_) => MobileError::Stopped,
+    }
+}
+impl Drop for MobileSigner {
+    fn drop(&mut self) {
+        self.stopping
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.requests.take();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
     }
 }
 
@@ -230,8 +292,9 @@ impl MobileSigner {
 fn worker(
     bundle: String,
     options: String,
-    ready: mpsc::Sender<Result<(), MobileError>>,
+    ready: mpsc::SyncSender<Result<(), MobileError>>,
     incoming: mpsc::Receiver<Request>,
+    stopping: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
     let mut engine = match engine::QuickJs::start(&bundle, &options) {
         Ok(engine) => {
@@ -247,6 +310,16 @@ fn worker(
     // One request at a time, in arrival order. The channel closing ends the thread,
     // which is how a dropped signer shuts its engine down.
     while let Ok(request) = incoming.recv() {
+        if stopping.load(std::sync::atomic::Ordering::Acquire) {
+            break;
+        }
+        if std::time::Instant::now() >= request.deadline {
+            continue;
+        }
+        #[cfg(feature = "live")]
+        if matches!(&request.reply, Reply::Async(reply) if reply.is_closed()) {
+            continue;
+        }
         let answer = engine.sign(&request.url, request.product.as_driver_arg());
         match request.reply {
             Reply::Blocking(reply) => {
@@ -376,6 +449,84 @@ fn unescape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const QUEUE_BUNDLE: &str = "window.byted_acrawler={init:function(){},registerWsSigner:function(){let calls=0; return function(){return {'X-Gnarly':'fixture-'+(++calls)}}}};";
+    #[test]
+    fn capacity_validation_and_repeated_drop_do_not_leave_workers() {
+        for capacity in [0, 65_537] {
+            assert!(MobileSigner::with_capacity(QUEUE_BUNDLE, "{}", capacity).is_err());
+        }
+        for _ in 0..10 {
+            let signer = MobileSigner::with_capacity(QUEUE_BUNDLE, "{}", 1).unwrap();
+            assert!(signer
+                .sign("wss://example.test/?a=1", Product::Ws)
+                .unwrap()
+                .contains("fixture-1"));
+        }
+    }
+    #[cfg(feature = "live")]
+    #[test]
+    fn worker_skips_expired_and_cancelled_queued_requests() {
+        let (requests, incoming) = mpsc::sync_channel(3);
+        let (expired, expired_answer) = mpsc::sync_channel(1);
+        requests
+            .send(Request {
+                deadline: std::time::Instant::now(),
+                url: "wss://expired".into(),
+                product: Product::Ws,
+                reply: Reply::Blocking(expired),
+            })
+            .unwrap();
+        let (cancelled, cancelled_answer) = tokio::sync::oneshot::channel();
+        drop(cancelled_answer);
+        requests
+            .send(Request {
+                deadline: std::time::Instant::now() + std::time::Duration::from_secs(30),
+                url: "wss://cancelled".into(),
+                product: Product::Ws,
+                reply: Reply::Async(cancelled),
+            })
+            .unwrap();
+        let (reply, answer) = mpsc::sync_channel(1);
+        requests
+            .send(Request {
+                deadline: std::time::Instant::now() + std::time::Duration::from_secs(30),
+                url: "wss://example.test/?a=1".into(),
+                product: Product::Ws,
+                reply: Reply::Blocking(reply),
+            })
+            .unwrap();
+        assert!(matches!(
+            requests.try_send(Request {
+                deadline: std::time::Instant::now(),
+                url: String::new(),
+                product: Product::Ws,
+                reply: Reply::Blocking(mpsc::sync_channel(1).0)
+            }),
+            Err(mpsc::TrySendError::Full(_))
+        ));
+        drop(requests);
+        let (ready, started) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            super::worker(
+                QUEUE_BUNDLE.into(),
+                SignOptions::default().to_driver_json(),
+                ready,
+                incoming,
+                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            )
+        });
+        started.recv().unwrap().unwrap();
+        assert!(expired_answer
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .is_err());
+        assert!(answer
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap()
+            .unwrap()
+            .contains("fixture-1"));
+        worker.join().unwrap();
+    }
 
     #[test]
     fn products_round_trip_through_the_driver_names() {

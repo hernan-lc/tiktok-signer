@@ -98,13 +98,17 @@ object Feed {
     class GuestSession {
         private val jar = LinkedHashMap<String, String>()
 
+        @Synchronized
         fun cookieHeader(): String = jar.entries.joinToString("; ") { "${it.key}=${it.value}" }
 
+        @Synchronized
         fun isEmpty(): Boolean = jar.isEmpty()
 
         /** Cookie names only — values stay out of the settings screen. */
+        @Synchronized
         fun cookieNames(): List<String> = jar.keys.toList()
 
+        @Synchronized
         fun clear() {
             jar.clear()
         }
@@ -134,15 +138,24 @@ object Feed {
                 }
             }
 
+        @Synchronized
         internal fun absorb(connection: HttpURLConnection) {
+            val updated = LinkedHashMap(jar)
             for ((name, values) in connection.headerFields) {
                 if (!name.equals("Set-Cookie", ignoreCase = true)) continue
                 for (header in values ?: continue) {
                     val pair = header.substringBefore(';')
                     val at = pair.indexOf('=')
-                    if (at > 0) jar[pair.substring(0, at).trim()] = pair.substring(at + 1)
+                    if (at > 0) {
+                        updated[pair.substring(0, at).trim()] = pair.substring(at + 1)
+                        require(updated.size <= 256 && updated.entries.sumOf { (key, value) -> key.length + value.length } <= 65536) {
+                            "Guest cookie capacity exceeded"
+                        }
+                    }
                 }
             }
+            jar.clear()
+            jar.putAll(updated)
         }
     }
 

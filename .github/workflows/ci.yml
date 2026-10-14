@@ -21,6 +21,17 @@ jobs:
       - name: Check Node LIVE package
         working-directory: packages/tiktok-live
         run: npm run check
+      - name: Check broker-backed Node SDK
+        working-directory: packages/live-sdk
+        run: |
+          npm ci
+          npm run build
+          npm test
+      - name: Smoke-test offline Node decoding benchmark
+        working-directory: packages/tiktok-live
+        run: |
+          node scripts/decode-bench.mjs 100
+          node scripts/lifecycle-soak.mjs 3
       - name: Install workspace Rust toolchain
         run: |
           rustup toolchain install 1.88 --profile minimal --component rustfmt --component clippy
@@ -36,8 +47,13 @@ jobs:
             exit 1
           fi
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - name: Smoke-test offline Rust benchmarks
+        run: |
+          cargo run -p ttl-live-events --example decode_bench -- normalized 100
+          cargo run -p ttl-live-native --example event_bench -- metadata 100
+          TTL_SOAK_SECONDS=3 cargo test -p ttl-live-native --lib offline_callback_lifecycle_soak -- --ignored
       - name: Check the Android JNI boundary
         # The `jni`/`live` features are off by default, so the lines above never compile them.
         run: |
@@ -55,8 +71,15 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.88'
+      - name: Build host JNI library for offline ownership tests
+        run: cargo build -p ttl-sign-mobile --features jni,live
       - name: Build Java SDK and examples; run offline parity and lifecycle tests
         working-directory: sdk/java
+        env:
+          TTL_NATIVE_LIBRARY: ${{ github.workspace }}/target/debug/libttl_sign_mobile.so
         run: ./gradlew build publishToMavenLocal --console=plain
 
   android:

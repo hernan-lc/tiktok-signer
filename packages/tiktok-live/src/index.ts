@@ -35,6 +35,7 @@ export type {
 } from './session.js';
 export {
   ackFrame,
+  ackFrameForBatch,
   carriesEvents,
   decodeBatch,
   decodePushFrame,
@@ -54,3 +55,5 @@ export type {
 } from './player.js';
 export type { LoadBundleOptions, Product, SignerOptions } from './signer.js';
 export type * from './types.js';
+
+export type { DeliveryOptions, DeliveryMetrics } from './delivery.js';

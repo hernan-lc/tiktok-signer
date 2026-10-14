@@ -1,3 +1,4 @@
+import { EventDelivery, type DeliveryOptions, type DeliveryMetrics } from "../../tiktok-live/src/delivery.js";
 import { EventEmitter } from 'node:events';
 import WebSocket from 'ws';
 
@@ -7,7 +8,10 @@ import { asError, isRetryable, LiveApiError, ProtocolError, SocketError } from '
 import { boundedHeartbeatMs, startHeartbeat } from './heartbeat.js';
 import { DEFAULT_RECONNECT, reconnectDelay } from './reconnect.js';
 import {
-  ackFrame,
+  SocketWriteOverflowError,
+  sendBoundedFrame,
+  writeBufferLimit,
+  ackFrameForBatch,
   carriesEvents,
   decodeBatch,
   decodePushFrame,
@@ -34,6 +38,9 @@ import type { WebSocketConstructor, WebSocketLike } from './protocol.js';
 const OPEN_TIMEOUT_MS = 15_000;
 
 export interface TikTokLiveOptions extends ConnectApiOptions {
+  eventDelivery?: DeliveryOptions;
+  /** Pending WebSocket write bytes, 32 MiB by default. */
+  maxBufferedBytes?: number;
   /** Fetch the room gift catalog directly from TikTok once per live descriptor. */
   fetchGifts?: boolean;
   reconnect?: Partial<ReconnectPolicy>;
@@ -95,11 +102,22 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   #reconnectTimer: NodeJS.Timeout | null = null;
   #connecting: Promise<LiveState> | null = null;
   #closing = false;
+  #generation = 0;
+  #connectAbort: AbortController | null = null;
+  #listenerErrors = 0;
+  #writeBufferRejections = 0;
+  readonly #delivery: EventDelivery<LiveEvent>;
+  readonly #maxBufferedBytes: number;
+  #cancelOpen: (() => void) | null = null;
   #attempt = 0;
   #gifts = new Map<string, Gift>();
 
   constructor(uniqueId: string, options: TikTokLiveOptions = {}) {
     super();
+    this.#maxBufferedBytes = writeBufferLimit(options.maxBufferedBytes);
+    this.#delivery = new EventDelivery(options.eventDelivery,
+      (event, generation) => this.#dispatch(event, generation),
+      (error) => { this.disconnect(); this.#emitError(error); });
     this.uniqueId = normalizeUniqueId(uniqueId);
     this.api = new ConnectApi(options);
     this.#options = {
@@ -132,7 +150,11 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     if (this.connected) return Promise.resolve(this.state());
     if (this.#connecting) return this.#connecting;
     this.#closing = false;
-    const connecting = this.#connectFromApi();
+    if (this.#reconnectTimer) clearTimeout(this.#reconnectTimer);
+    this.#reconnectTimer = null;
+    this.#connectAbort = new AbortController();
+    const generation = ++this.#generation;
+    const connecting = this.#connectFromApi(generation);
     this.#connecting = connecting;
     void connecting.finally(() => {
       if (this.#connecting === connecting) this.#connecting = null;
@@ -151,6 +173,13 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
 
   disconnect(): void {
     this.#closing = true;
+    this.#connectAbort?.abort();
+    this.#connectAbort = null;
+    this.#generation += 1;
+    this.#delivery.clear();
+    this.#connecting = null;
+    this.#cancelOpen?.();
+    this.#cancelOpen = null;
     this.#socketOpen = false;
     if (this.#reconnectTimer) clearTimeout(this.#reconnectTimer);
     this.#reconnectTimer = null;
@@ -163,12 +192,13 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
       } catch {
         // The peer may already have closed it.
       }
+      try { socket.terminate?.(); } catch { /* Already closed. */ }
     }
   }
 
-  async #connectFromApi(): Promise<LiveState> {
-    const descriptor = await this.api.connect(this.uniqueId);
-    if (this.#closing) throw new SocketError('connection cancelled');
+  async #connectFromApi(generation: number): Promise<LiveState> {
+    const descriptor = await this.api.connect(this.uniqueId, this.#connectAbort?.signal);
+    this.#checkGeneration(generation);
 
     this.#roomId = descriptor.roomId ?? null;
     this.#status = descriptor.status;
@@ -181,30 +211,39 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
       throw new ProtocolError('live response did not include connection metadata');
     }
 
-    if (this.#options.fetchGifts) await this.#loadGifts(descriptor.connection, descriptor.roomId);
-    await this.#open(descriptor.connection, descriptor.roomId);
+    if (this.#options.fetchGifts) await this.#loadGifts(descriptor.connection, descriptor.roomId, generation);
+    this.#checkGeneration(generation);
+    await this.#open(descriptor.connection, descriptor.roomId, generation);
     return this.state();
   }
 
-  async #loadGifts(descriptor: ConnectionDescriptor, roomId: string): Promise<void> {
+  async #loadGifts(descriptor: ConnectionDescriptor, roomId: string, generation: number): Promise<void> {
     try {
       const discovery = new Discovery({
         cookie: descriptor.cookies,
         userAgent: descriptor.userAgent,
         timeoutMs: this.api.timeoutMs,
       });
-      this.#gifts = await discovery.giftList(roomId);
+      const gifts = await discovery.giftList(roomId, this.#connectAbort?.signal);
+      this.#checkGeneration(generation);
+      this.#gifts = gifts;
     } catch (error) {
+      this.#checkGeneration(generation);
       this.#emitError(error);
       this.#gifts = new Map<string, Gift>();
     }
   }
 
-  async #open(descriptor: ConnectionDescriptor, roomId: string): Promise<void> {
+  async #open(descriptor: ConnectionDescriptor, roomId: string, generation: number): Promise<void> {
+    this.#checkGeneration(generation);
     const implementation = this.#options.WebSocketImpl
       ?? (WebSocket as unknown as WebSocketConstructor);
 
     const socket = createDirectSocket(descriptor, implementation);
+    if (this.#closing || generation !== this.#generation) {
+      try { socket.close(); } catch { /* Already closed. */ }
+      throw new SocketError('connection cancelled');
+    }
     this.#socket = socket;
     await new Promise<void>((resolve, reject) => {
       let settled = false;
@@ -221,9 +260,17 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
       }, OPEN_TIMEOUT_MS);
       timer.unref?.();
 
+      this.#cancelOpen = () => {
+        clearTimeout(timer);
+        if (!settled) {
+          settled = true;
+          reject(new SocketError('connection cancelled'));
+        }
+      };
+
       socket.addEventListener('open', () => {
         if (settled) return;
-        if (this.#closing) {
+        if (this.#closing || generation !== this.#generation || this.#socket !== socket) {
           settled = true;
           clearTimeout(timer);
           socket.close();
@@ -231,7 +278,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
           return;
         }
         try {
-          socket.send(enterRoomFrame({ roomId }));
+          this.#send(socket, enterRoomFrame({ roomId }));
         } catch (error) {
           settled = true;
           clearTimeout(timer);
@@ -251,19 +298,24 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
         clearTimeout(timer);
         settled = true;
         resolve();
-        this.emit('connected', this.state());
+        this.#cancelOpen = null;
+        this.#notify(() => this.emit('connected', this.state()));
       });
 
       socket.addEventListener('message', (message) => {
-        if (this.#socket === socket) this.#receive(socket, message.data);
+        if (!this.#closing && this.#socket === socket && generation === this.#generation) this.#receive(socket, message.data);
       });
 
       socket.addEventListener('error', (event) => {
+        if (this.#socket !== socket || generation !== this.#generation) return;
         const error = new SocketError(event.message ?? 'TikTok WebSocket error');
         if (settled) this.#emitError(error);
       });
 
       socket.addEventListener('close', (event) => {
+        clearTimeout(timer);
+        if (this.#socket !== socket) return;
+        this.#cancelOpen = null;
         if (this.#socket === socket) this.#socket = null;
         this.#socketOpen = false;
         this.#stopHeartbeat();
@@ -279,13 +331,14 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
           return;
         }
         this.#status = 'live';
-        this.emit('disconnected', { code: event.code, reason: String(event.reason ?? '') });
+        this.#notify(() => this.emit('disconnected', { code: event.code, reason: String(event.reason ?? '') }));
         if (!this.#closing) this.#scheduleReconnect();
       });
     });
   }
 
   #receive(socket: WebSocketLike, data: ArrayBuffer | ArrayBufferView): void {
+    const generation = this.#generation;
     let frame;
     try {
       frame = decodePushFrame(data);
@@ -311,20 +364,22 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     // TikTok push server decide this client is dead.
     if (batch.needAck) {
       try {
-        socket.send(ackFrame(frame, batch.internalExt));
+        this.#send(socket, ackFrameForBatch(frame, batch.internalExt));
       } catch (error) {
         this.#emitError(error);
       }
     }
 
     for (const message of batch.messages) {
-      const event = this.#enrich({
-        ...decodeEvent(message.method, message.payload),
-        msgId: message.msgId.toString(),
-        isHistory: message.isHistory,
-      });
-      this.emit('event', event);
-      this.#emitTypedEvent(event);
+      const event = this.#enrich(decodeEvent(message.method, message.payload));
+      event.msgId = message.msgId.toString();
+      event.isHistory = message.isHistory;
+      if (this.#closing || generation !== this.#generation) break;
+      // Include the backing buffer for unknown events: a small view can retain a whole batch.
+      const metadataBytes = event.method.length * 2 + (event.msgId?.length ?? 0) * 2 + 256;
+      const bytes = event.type === 'unknown' ? event.payload.buffer.byteLength + metadataBytes
+        : message.payload.byteLength * 64 + metadataBytes;
+      this.#delivery.submit(event, generation, bytes);
     }
   }
 
@@ -332,19 +387,20 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     if (event.type !== EVENT.gift) return event;
     const gift = this.#gifts.get(event.giftId);
     if (!gift) return event;
-    return {
-      ...event,
-      giftName: event.giftName || gift.name,
-      diamondCount: event.diamondCount || gift.diamondCount,
-      giftIconUrl: gift.iconUrl || undefined,
-      streakable: gift.combo,
-    };
+    event.giftName ||= gift.name;
+    event.diamondCount ||= gift.diamondCount;
+    event.giftIconUrl = gift.iconUrl || undefined;
+    event.streakable = gift.combo;
+    return event;
   }
 
   #startHeartbeat(socket: WebSocketLike, roomId: string, everyMs: number): void {
     this.#stopHeartbeat();
     this.#heartbeat = startHeartbeat(roomId, everyMs, (frame) => {
-      if (this.#socket === socket) socket.send(frame);
+      if (this.#socket === socket) {
+        try { this.#send(socket, frame); }
+        catch (error) { if (error instanceof SocketWriteOverflowError) this.#emitError(error); throw error; }
+      }
     });
   }
 
@@ -354,7 +410,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   }
 
   #scheduleReconnect(minDelayMs = 0): void {
-    if (this.#closing) return;
+    if (this.#closing || this.#reconnectTimer) return;
     const policy = this.#options.reconnect;
     if (this.#attempt >= Math.max(0, Math.floor(policy.attempts))) {
       this.#emitError(new LiveApiError(
@@ -365,9 +421,12 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     }
     this.#attempt += 1;
     const delayMs = Math.max(reconnectDelay(policy, this.#attempt), Math.max(0, minDelayMs));
-    this.emit('reconnecting', { attempt: this.#attempt, delayMs });
+    const generation = this.#generation;
+    this.#notify(() => this.emit('reconnecting', { attempt: this.#attempt, delayMs }));
+    if (this.#closing || generation !== this.#generation) return;
     const timer = setTimeout(() => {
-      if (this.#closing) return;
+      this.#reconnectTimer = null;
+      if (this.#closing || generation !== this.#generation) return;
       this.#reconnectTimer = null;
       void this.#reconnect();
     }, delayMs);
@@ -376,10 +435,14 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   }
 
   async #reconnect(): Promise<void> {
+    let generation = this.#generation;
     try {
-      const state = await this.#connectFromApi();
+      const connecting = this.connect();
+      generation = this.#generation;
+      const state = await connecting;
       if (state.status === 'offline' && !this.#closing) this.#scheduleReconnect();
     } catch (error) {
+      if (this.#closing || generation !== this.#generation) return;
       this.#emitError(error);
       const retryAfterMs = error instanceof LiveApiError ? error.retryAfterMs ?? 0 : 0;
       if (!this.#closing && isRetryable(error)) this.#scheduleReconnect(retryAfterMs);
@@ -387,7 +450,27 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   }
 
   #announceOffline(): void {
-    this.emit('offline');
+    this.#notify(() => this.emit('offline'));
+  }
+
+  deliveryMetrics(): DeliveryMetrics & { listenerErrors: number; writeBufferRejections: number } {
+    return { ...this.#delivery.metrics(), listenerErrors: this.#listenerErrors, writeBufferRejections: this.#writeBufferRejections };
+  }
+
+  #dispatch(event: LiveEvent, generation: number): boolean {
+    if (this.#closing || generation !== this.#generation) return false;
+    try { this.emit('event', event); } catch (error) { this.#listenerErrors++; this.#emitError(error); }
+    if (!this.#closing && generation === this.#generation) {
+      try { this.#emitTypedEvent(event); } catch (error) { this.#listenerErrors++; this.#emitError(error); }
+    }
+    return true;
+  }
+  #notify(action: () => void): void {
+    try { action(); } catch (error) { this.#listenerErrors++; this.#emitError(error); }
+  }
+
+  #checkGeneration(generation: number): void {
+    if (this.#closing || generation !== this.#generation) throw new SocketError('connection cancelled');
   }
 
   #emitTypedEvent(event: LiveEvent): void {
@@ -402,11 +485,18 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     }
   }
 
+  #send(socket: WebSocketLike, frame: ArrayBuffer | ArrayBufferView): void {
+    try { sendBoundedFrame(socket, frame, this.#maxBufferedBytes); }
+    catch (error) { if (error instanceof SocketWriteOverflowError) { this.#writeBufferRejections++; this.#cancelOpen = null; this.disconnect(); } throw error; }
+  }
+
   #emitError(error: unknown): void {
     const normalized = asError(error);
     // Node's EventEmitter treats an unhandled `error` event as process-fatal. Keep transport
     // failures observable when a listener is installed without making a missing optional handler
     // take down a long-running SDK process.
-    if (this.listenerCount('error') > 0) this.emit('error', normalized);
+    if (this.listenerCount('error') > 0) {
+      try { this.emit('error', normalized); } catch { this.#listenerErrors++; }
+    }
   }
 }

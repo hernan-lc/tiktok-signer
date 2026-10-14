@@ -28,7 +28,7 @@ object Logger {
     private val buffer = ArrayDeque<String>()
     private val listeners = mutableSetOf<Listener>()
 
-    fun stamp(): String = clock.format(Date())
+    fun stamp(): String = synchronized(lock) { clock.format(Date()) }
 
     /** `[12:00:01.234] TAG message`. */
     fun line(tag: String, msg: String): String = "[${stamp()}] $tag $msg"
@@ -42,7 +42,7 @@ object Logger {
             val line = line(tag, msg)
             buffer.addLast(line)
             while (buffer.size > MAX_BUFFER_LINES) buffer.removeFirst()
-            listeners.forEach { it.onLine(line) }
+            listeners.toList().forEach { it.onLine(line) }
             line
         }
 
@@ -52,7 +52,7 @@ object Logger {
     fun clear() =
         synchronized(lock) {
             buffer.clear()
-            listeners.forEach { it.onCleared() }
+            listeners.toList().forEach { it.onCleared() }
         }
 
     fun addListener(listener: Listener) {

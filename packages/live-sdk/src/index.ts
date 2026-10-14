@@ -26,6 +26,7 @@ export { normalizeUniqueId } from './unique-id.js';
 // class API keeps signing and room-id handling out of the caller's control.
 export {
   ackFrame,
+  ackFrameForBatch,
   carriesEvents,
   decodeBatch,
   decodePushFrame,
@@ -50,3 +51,5 @@ export type {
   UnknownEvent,
 } from './events.js';
 export type { WebSocketConstructor, WebSocketLike, WebSocketOptions } from './protocol.js';
+
+export type { DeliveryOptions, DeliveryMetrics } from '../../tiktok-live/src/delivery.js';

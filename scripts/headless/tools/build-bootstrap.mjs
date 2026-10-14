@@ -72,7 +72,10 @@ if (typeof globalThis.setTimeout === 'undefined') {
   globalThis.setTimeout = (callback, delay) => {
     const id = nextId++;
     if (!delay) { try { callback(); } catch (error) { globalThis.__ttlTimerError = String(error); } }
-    else pending.set(id, callback);
+    else {
+      if (pending.size >= 1024) throw new RangeError('embedded timer capacity exceeded');
+      pending.set(id, callback);
+    }
     return id;
   };
   globalThis.setInterval = (callback, delay) => globalThis.setTimeout(() => {}, delay);

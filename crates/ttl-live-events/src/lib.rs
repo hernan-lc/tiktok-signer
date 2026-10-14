@@ -64,7 +64,7 @@ pub enum EventError {
 }
 
 /// Decodes one decompressed WebSocket payload into normalised events.
-pub fn decode_batch(payload: &[u8]) -> Result<EventBatch, EventError> {
+fn check_batch(payload: &[u8]) -> Result<(), EventError> {
     if payload.len() > 16 * 1024 * 1024 {
         return Err(EventError::TooLarge);
     }
@@ -83,6 +83,12 @@ pub fn decode_batch(payload: &[u8]) -> Result<EventBatch, EventError> {
             Err(_) => break, // Prost reports the precise envelope error.
         }
     }
+    Ok(())
+}
+
+/// Decodes a batch with the legacy full representation and serialization contract.
+pub fn decode_batch(payload: &[u8]) -> Result<EventBatch, EventError> {
+    check_batch(payload)?;
     let result = ttl_live_proto::decode_event_batch(payload)?;
     let mut schema_budget = 65_536;
     Ok(EventBatch {
@@ -97,6 +103,143 @@ pub fn decode_batch(payload: &[u8]) -> Result<EventBatch, EventError> {
         heartbeat_duration: result.heartbeat_duration,
         push_server: result.push_server,
     })
+}
+
+/// Representations requested by an optimized consumer. Legacy APIs retain Full behavior.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DecodeMode {
+    Normalized,
+    Schema,
+    #[default]
+    Full,
+    Raw,
+}
+
+/// Selective decoding preserves envelope metadata independently of representations.
+#[derive(Debug)]
+pub struct SelectedEvent {
+    /// Server-defined common.create_time units, matching EventEnvelope::timestamp.
+    pub timestamp: Option<u64>,
+    pub method: String,
+    pub msg_id: u64,
+    pub is_history: bool,
+    pub payload: Option<Vec<u8>>,
+    pub event: Option<LiveEvent>,
+    pub schema: Option<SchemaMessage>,
+    pub truncated: bool,
+}
+
+/// Batch metadata has the same meaning as in the legacy EventBatch.
+#[derive(Debug)]
+pub struct SelectedBatch {
+    pub events: Vec<SelectedEvent>,
+    pub cursor: String,
+    pub internal_ext: String,
+    pub need_ack: bool,
+    pub heartbeat_duration: i64,
+    pub push_server: String,
+}
+
+/// Decode only requested representations. Limits and ordered malformed-event isolation
+/// are preserved. Unknown normalized events own their bytes exactly once.
+pub fn decode_batch_with_mode(
+    payload: &[u8],
+    mode: DecodeMode,
+) -> Result<SelectedBatch, EventError> {
+    check_batch(payload)?;
+    let result = ttl_live_proto::decode_event_batch(payload)?;
+    let mut budget = 65_536;
+    let events = result
+        .messages
+        .into_iter()
+        .map(|mut message| {
+            let oversized = message.payload.len() > dynamic::MAX_EVENT_BYTES;
+            message.payload.truncate(dynamic::MAX_EVENT_BYTES);
+            let schema = if matches!(mode, DecodeMode::Full | DecodeMode::Schema) {
+                let mut schema = dynamic::decode_webcast_message_budget(
+                    &message.method,
+                    &message.payload,
+                    &mut budget,
+                )
+                .expect("partial decoder is infallible");
+                schema.truncated |= oversized;
+                Some(schema)
+            } else {
+                None
+            };
+            let (wire_truncated, timestamp) = if schema.is_none() {
+                dynamic::preflight_event(&message.method, &message.payload, &mut budget)
+            } else {
+                (
+                    false,
+                    schema
+                        .as_ref()
+                        .and_then(|s| s.message("common")?.number("create_time")),
+                )
+            };
+            let truncated =
+                oversized || wire_truncated || schema.as_ref().is_some_and(|s| s.truncated);
+            let mut event =
+                if matches!(mode, DecodeMode::Full | DecodeMode::Normalized) && !truncated {
+                    normalize_payload(&message.method, &message.payload)
+                        .ok()
+                        .flatten()
+                } else {
+                    None
+                };
+            let retain_payload = matches!(mode, DecodeMode::Full | DecodeMode::Raw);
+            let payload = if retain_payload {
+                Some(message.payload)
+            } else {
+                if mode == DecodeMode::Normalized && event.is_none() {
+                    event = Some(LiveEvent::Unknown {
+                        method: message.method.clone(),
+                        payload: message.payload,
+                    });
+                }
+                None
+            };
+            if mode == DecodeMode::Full && event.is_none() {
+                event = Some(LiveEvent::Unknown {
+                    method: message.method.clone(),
+                    payload: payload.as_ref().unwrap().clone(),
+                });
+            }
+            SelectedEvent {
+                timestamp,
+                method: message.method,
+                msg_id: message.msg_id as u64,
+                is_history: message.is_history,
+                payload,
+                event,
+                schema,
+                truncated,
+            }
+        })
+        .collect();
+    Ok(SelectedBatch {
+        events,
+        cursor: result.cursor,
+        internal_ext: result.internal_ext,
+        need_ack: result.need_ack,
+        heartbeat_duration: result.heartbeat_duration,
+        push_server: result.push_server,
+    })
+}
+
+fn normalize_payload(
+    method: &str,
+    payload: &[u8],
+) -> Result<Option<LiveEvent>, prost::DecodeError> {
+    match method {
+        method::CHAT => normalize::chat(payload).map(Some),
+        method::GIFT => normalize::gift(payload).map(Some),
+        method::LIKE => normalize::like(payload).map(Some),
+        method::MEMBER => normalize::member(payload).map(Some),
+        method::SOCIAL => normalize::social(payload).map(Some),
+        method::ROOM_USER => normalize::room_user(payload).map(Some),
+        _ => Ok(None),
+    }
 }
 
 /// Normalises a single event payload, given the method that carried it.

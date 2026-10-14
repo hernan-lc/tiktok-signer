@@ -550,11 +550,17 @@ impl PushFrame {
         } else {
             internal_ext
         };
+        self.ack_for_batch(payload)
+    }
+
+    /// Player-compatible per-batch ACK. Empty extension leaves payload empty.
+    /// The legacy `ack` helper retains its historical `-` fallback contract.
+    pub fn ack_for_batch(&self, internal_ext: &str) -> Self {
         Self {
             log_id: self.log_id,
             payload_type: "ack".into(),
             payload_encoding: "pb".into(),
-            payload: payload.as_bytes().to_vec(),
+            payload: internal_ext.as_bytes().to_vec(),
             ..Default::default()
         }
     }

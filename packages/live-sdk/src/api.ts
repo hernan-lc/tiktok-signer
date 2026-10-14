@@ -1,3 +1,4 @@
+import { readResponseText } from '../../tiktok-live/src/http.js';
 import { LiveApiError, ProtocolError } from './errors.js';
 import { normalizeUniqueId } from './unique-id.js';
 
@@ -44,7 +45,7 @@ export class ConnectApi {
     this.#fetch = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
   }
 
-  async connect(uniqueId: string): Promise<ConnectResponse> {
+  async connect(uniqueId: string, signal?: AbortSignal): Promise<ConnectResponse> {
     uniqueId = normalizeUniqueId(uniqueId);
     const url = new URL('/v1/connect', this.apiUrl).toString();
     const headers: Record<string, string> = {
@@ -59,7 +60,7 @@ export class ConnectApi {
         method: 'POST',
         headers,
         body: JSON.stringify({ uniqueId }),
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(this.timeoutMs)]) : AbortSignal.timeout(this.timeoutMs),
       });
     } catch (error) {
       const detail = error instanceof Error ? `: ${error.message}` : '';
@@ -101,7 +102,7 @@ function boundedTimeout(value: number): number {
 
 async function readBody(response: Response): Promise<string> {
   try {
-    return await response.text();
+    return await readResponseText(response, 1024 * 1024);
   } catch {
     throw new ProtocolError(`connection broker response body could not be read (HTTP ${response.status})`);
   }

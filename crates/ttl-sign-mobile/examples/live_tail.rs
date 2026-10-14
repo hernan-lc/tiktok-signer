@@ -12,23 +12,33 @@
 //! Prints states plus one line per event (type, user, and a short detail — never a
 //! full payload). AUTHORIZED USE ONLY: this opens a real signed socket.
 
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use ttl_sign_mobile::live::{LiveClient, LiveSink};
 
 struct Print {
-    events: mpsc::Sender<String>,
-    states: mpsc::Sender<(String, String)>,
+    overloaded: Arc<AtomicBool>,
+    events: mpsc::SyncSender<String>,
+    states: mpsc::SyncSender<(String, String)>,
 }
 
 impl LiveSink for Print {
     fn on_state(&self, kind: &str, detail: &str) {
-        let _ = self.states.send((kind.to_string(), detail.to_string()));
+        if self
+            .states
+            .try_send((kind.to_string(), detail.to_string()))
+            .is_err()
+        {
+            self.overloaded.store(true, Ordering::Release);
+        }
     }
 
     fn on_event(&self, json: &str) {
-        let _ = self.events.send(json.to_string());
+        if self.events.try_send(json.to_string()).is_err() {
+            self.overloaded.store(true, Ordering::Release);
+        }
     }
 }
 
@@ -103,14 +113,16 @@ fn main() {
         std::process::exit(2);
     });
 
-    let (events_tx, events) = mpsc::channel();
-    let (states_tx, states) = mpsc::channel();
+    let overloaded = Arc::new(AtomicBool::new(false));
+    let (events_tx, events) = mpsc::sync_channel(1024);
+    let (states_tx, states) = mpsc::sync_channel(64);
     let client = LiveClient::connect(
         &bundle,
         "{}",
         &room_id,
         &cookies,
         Print {
+            overloaded: Arc::clone(&overloaded),
             events: events_tx,
             states: states_tx,
         },
@@ -123,6 +135,12 @@ fn main() {
     let deadline = Instant::now() + Duration::from_secs(seconds);
     let mut count = 0usize;
     while Instant::now() < deadline {
+        if overloaded.load(Ordering::Acquire) {
+            eprintln!(
+                "output queue overloaded; disconnecting instead of continuing with lost events"
+            );
+            break;
+        }
         for (kind, detail) in states.try_iter() {
             println!("[state] {kind}: {detail}");
         }

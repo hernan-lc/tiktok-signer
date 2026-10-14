@@ -8,6 +8,7 @@
 // The Rust statement of these URLs and shapes is `crates/ttl-sign-core/src/room.rs`; this is the
 // same set, and `test/discovery.test.ts` pins the parsing against recorded shapes.
 
+import { readResponseText } from './http.js';
 import { USER_AGENT } from './session.js';
 import { validateJson } from './json-validation.js';
 import {
@@ -110,6 +111,7 @@ export class Discovery {
     url: string,
     endpoint: string,
     validator: (value: unknown) => T,
+    signal?: AbortSignal,
   ): Promise<T> {
     const response = await fetch(url, {
       headers: {
@@ -117,12 +119,12 @@ export class Discovery {
         referer: 'https://www.tiktok.com/',
         ...(this.cookie ? { cookie: this.cookie } : {}),
       },
-      signal: AbortSignal.timeout(this.timeoutMs),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(this.timeoutMs)]) : AbortSignal.timeout(this.timeoutMs),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status} from ${new URL(url).pathname}`);
     let raw: unknown;
     try {
-      raw = await response.json();
+      raw = response.body ? JSON.parse(await readResponseText(response, 16 * 1024 * 1024)) : await response.json();
     } catch {
       throw new TypeError(`Invalid ${endpoint}: $ expected valid JSON`);
     }
@@ -130,12 +132,13 @@ export class Discovery {
   }
 
   /// `@handle` → room. Returns `{ uniqueId, roomId, nickname, status, title, isLive }`.
-  async roomLookup(uniqueId: string): Promise<RoomLookup> {
+  async roomLookup(uniqueId: string, signal?: AbortSignal): Promise<RoomLookup> {
     const endpoint = 'TikTok room lookup response';
     const body = await this.#json<TikTokRoomLookupResponse>(
       roomLookupUrl(uniqueId),
       endpoint,
       (raw) => validateJson<TikTokRoomLookupResponse>(raw, TikTokRoomLookupResponseSchema, endpoint),
+      signal,
     );
     const user = body.data?.user;
     if (!user) throw new Error(`no room data for @${strip(uniqueId)}`);
@@ -153,12 +156,13 @@ export class Discovery {
   }
 
   /// Room metadata: title, owner, counters.
-  async roomInfo(roomId: string): Promise<RoomInfo> {
+  async roomInfo(roomId: string, signal?: AbortSignal): Promise<RoomInfo> {
     const endpoint = 'TikTok room info response';
     const body = await this.#json<TikTokRoomInfoResponse>(
       roomInfoUrl(roomId),
       endpoint,
       (raw) => validateJson<TikTokRoomInfoResponse>(raw, TikTokRoomInfoResponseSchema, endpoint),
+      signal,
     );
     if (body.status_code !== 0) throw new WebcastRefusal(body.status_code, body.data?.message);
     const data = body.data ?? {};
@@ -191,12 +195,13 @@ export class Discovery {
   /// About 2.6 MB for 600-odd gifts, so read it once per connection rather than per event. It is
   /// what turns a `gift` event into a diamond value when the event's own detail block is omitted,
   /// which happens on every repeat of a streak.
-  async giftList(roomId: string): Promise<Map<string, Gift>> {
+  async giftList(roomId: string, signal?: AbortSignal): Promise<Map<string, Gift>> {
     const endpoint = 'TikTok gift list response';
     const body = await this.#json<TikTokGiftListResponse>(
       giftListUrl(roomId),
       endpoint,
       (raw) => validateJson<TikTokGiftListResponse>(raw, TikTokGiftListResponseSchema, endpoint),
+      signal,
     );
     if (body.status_code !== 0) throw new WebcastRefusal(body.status_code, body.data?.message);
     const gifts = new Map<string, Gift>();

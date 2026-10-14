@@ -1,0 +1,74 @@
+package io.github.nglmercer.tiktoklive.internal;
+
+import static org.junit.jupiter.api.Assertions.*;
+import io.github.nglmercer.tiktoklive.TikTokLive;
+import java.util.concurrent.*;
+import org.junit.jupiter.api.Test;
+
+class DeliveryOverloadTest {
+    @Test
+    void disconnectInvalidatesAlreadyQueuedBusinessCallbacks() throws Exception {
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        try (var client = TikTokLive.builder("creator").build()) {
+            client.onEvent(event -> {
+                calls.incrementAndGet(); entered.countDown();
+                try { release.await(5, TimeUnit.SECONDS); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            });
+            var emit = TikTokLive.class.getDeclaredMethod("emit", String.class, Object.class);
+            emit.setAccessible(true);
+            emit.invoke(client, "event", null);
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            emit.invoke(client, "event", null);
+            client.disconnect();
+            release.countDown();
+            var field = TikTokLive.class.getDeclaredField("events");
+            field.setAccessible(true);
+            ((ThreadPoolExecutor) field.get(client)).submit(() -> {}).get(5, TimeUnit.SECONDS);
+            assertEquals(1, calls.get());
+        } finally { release.countDown(); }
+    }
+
+    @Test
+    void cancelledTimersReleaseRetainedTasksImmediately() throws Exception {
+        try (var client = TikTokLive.builder("creator").build()) {
+            var field = TikTokLive.class.getDeclaredField("timers");
+            field.setAccessible(true);
+            var scheduler = (ScheduledThreadPoolExecutor) field.get(client);
+            for (int i = 0; i < 1000; i++) {
+                var future = scheduler.schedule(() -> {}, 1, TimeUnit.DAYS);
+                future.cancel(false);
+            }
+            assertEquals(0, scheduler.getQueue().size());
+        }
+    }
+
+    @Test
+    void saturationStopsDeliveryAndReportsTerminalError() throws Exception {
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var failed = new CountDownLatch(1);
+        try (var client = TikTokLive.builder("creator").build()) {
+            client.onEvent(event -> {
+                entered.countDown();
+                try { release.await(5, TimeUnit.SECONDS); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            });
+            client.onError(error -> {
+                assertTrue(error.getMessage().contains("overloaded"));
+                failed.countDown();
+            });
+            var emit = TikTokLive.class.getDeclaredMethod("emit", String.class, Object.class);
+            emit.setAccessible(true);
+            emit.invoke(client, "event", null);
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            for (int i = 0; i < 1100; i++) emit.invoke(client, "event", null);
+            assertFalse(client.state().connected());
+            assertEquals(1025, client.droppedCallbacks());
+            release.countDown();
+            assertTrue(failed.await(5, TimeUnit.SECONDS));
+        } finally { release.countDown(); }
+    }
+}

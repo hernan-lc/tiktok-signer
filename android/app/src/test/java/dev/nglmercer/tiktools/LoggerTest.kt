@@ -16,6 +16,41 @@ class LoggerTest {
             "&X-Gnarly=$gnarly"
 
     @Test
+    fun listenerCanUnregisterItselfWithoutInvalidatingIteration() {
+        var calls = 0
+        val listener = object : Logger.Listener {
+            override fun onLine(line: String) { calls++; Logger.removeListener(this) }
+            override fun onCleared() {}
+        }
+        val second = object : Logger.Listener {
+            override fun onLine(line: String) {}
+            override fun onCleared() {}
+        }
+        Logger.addListener(listener)
+        Logger.addListener(second)
+        try {
+            Logger.append("TEST", "first")
+            Logger.append("TEST", "second")
+            assertEquals(1, calls)
+        } finally { Logger.removeListener(listener); Logger.removeListener(second) }
+    }
+
+    @Test
+    fun concurrentTimestampFormattingRemainsValid() {
+        val workers = java.util.concurrent.Executors.newFixedThreadPool(8)
+        try {
+            val tasks = (0 until 8).map {
+                workers.submit {
+                    repeat(1000) {
+                        assertTrue(Regex("\\d{2}:\\d{2}:\\d{2}\\.\\d{3}").matches(Logger.stamp()))
+                    }
+                }
+            }
+            tasks.forEach { it.get(10, java.util.concurrent.TimeUnit.SECONDS) }
+        } finally { workers.shutdownNow() }
+    }
+
+    @Test
     fun lineIsTimestampedAndTagged() {
         val line = Logger.line("SIGN", "hello")
         assertTrue(line, Regex("""\[\d{2}:\d{2}:\d{2}\.\d{3}] SIGN hello""").matches(line))

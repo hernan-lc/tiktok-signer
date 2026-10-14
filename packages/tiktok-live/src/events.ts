@@ -101,7 +101,7 @@ function normalizeUser(user: User | undefined): EventUser {
 
 /// Decode a generated v3 User message, or return the same blank user for no nested message.
 export function decodeUser(payload?: Uint8Array): EventUser {
-  return normalizeUser(fromBinary(UserSchema, payload ?? new Uint8Array()));
+  return normalizeUser(fromBinary(UserSchema, payload ?? new Uint8Array(), { readUnknownFields: false }));
 }
 
 /// Best available label for a user, preferring the stable handle.
@@ -130,7 +130,7 @@ type Normalizer = (payload: Uint8Array) => NormalizedEvent;
 
 const NORMALIZE: Record<string, Normalizer> = {
   [METHOD.chat]: (payload) => {
-    const message = fromBinary(WebcastChatMessageSchema, payload);
+    const message = fromBinary(WebcastChatMessageSchema, payload, { readUnknownFields: false });
     return {
       type: EVENT.chat,
       user: normalizeUser(message.user),
@@ -138,7 +138,7 @@ const NORMALIZE: Record<string, Normalizer> = {
     } satisfies Omit<ChatEvent, 'method'>;
   },
   [METHOD.gift]: (payload) => {
-    const message = fromBinary(WebcastGiftMessageSchema, payload);
+    const message = fromBinary(WebcastGiftMessageSchema, payload, { readUnknownFields: false });
     // The nested detail block is omitted on repeat messages of a streak, so the name and price
     // fall back rather than failing: a gift with no name is still a gift.
     return {
@@ -157,7 +157,7 @@ const NORMALIZE: Record<string, Normalizer> = {
     } satisfies Omit<GiftEvent, 'method'>;
   },
   [METHOD.like]: (payload) => {
-    const message = fromBinary(WebcastLikeMessageSchema, payload);
+    const message = fromBinary(WebcastLikeMessageSchema, payload, { readUnknownFields: false });
     return {
       type: EVENT.like,
       user: normalizeUser(message.user),
@@ -166,7 +166,7 @@ const NORMALIZE: Record<string, Normalizer> = {
     } satisfies Omit<LikeEvent, 'method'>;
   },
   [METHOD.member]: (payload) => {
-    const message = fromBinary(WebcastMemberMessageSchema, payload);
+    const message = fromBinary(WebcastMemberMessageSchema, payload, { readUnknownFields: false });
     return {
       type: EVENT.member,
       user: normalizeUser(message.user),
@@ -175,7 +175,7 @@ const NORMALIZE: Record<string, Normalizer> = {
     } satisfies Omit<MemberEvent, 'method'>;
   },
   [METHOD.social]: (payload) => {
-    const message = fromBinary(WebcastSocialMessageSchema, payload);
+    const message = fromBinary(WebcastSocialMessageSchema, payload, { readUnknownFields: false });
     return {
       type: EVENT.social,
       user: normalizeUser(message.user),
@@ -185,7 +185,7 @@ const NORMALIZE: Record<string, Normalizer> = {
     } satisfies Omit<SocialEvent, 'method'>;
   },
   [METHOD.roomUser]: (payload) => {
-    const message = fromBinary(WebcastRoomUserSeqMessageSchema, payload);
+    const message = fromBinary(WebcastRoomUserSeqMessageSchema, payload, { readUnknownFields: false });
     const ranks = message.ranks.map(normalizeContributor);
     return {
       type: EVENT.roomUser,
@@ -210,7 +210,7 @@ export function decodeEvent(method: typeof METHOD.social, payload: Uint8Array): 
 export function decodeEvent(method: typeof METHOD.roomUser, payload: Uint8Array): RoomUserEvent | UnknownEvent;
 export function decodeEvent(method: string, payload: Uint8Array): LiveEvent;
 export function decodeEvent(method: string, payload: Uint8Array): LiveEvent {
-  const normalize = NORMALIZE[method];
+  const normalize = Object.hasOwn(NORMALIZE, method) ? NORMALIZE[method] : undefined;
   if (!normalize) return { type: EVENT.unknown, method, payload };
   try {
     return { ...normalize(payload), method };

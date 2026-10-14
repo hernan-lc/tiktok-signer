@@ -77,10 +77,11 @@ async fn live_inner(service: Arc<ConnectService>, request: Request<Body>) -> Res
     if let Err(error) = service.check_rate_limit(&customer_id, &unique_id).await {
         return error_response(error, request_id);
     }
-    // Bounds relay *setup* (resolve/sign/dial), not live sockets: the permit drops when
-    // this handler returns the upgrade response, while the relay(...) task stays up.
-    // Deliberate for a local check tool; an Internet-facing endpoint would need a
-    // separate cap on concurrent relays.
+    // Reserve a separate lifetime lease before discovery/signing or socket allocation.
+    let relay_slot = match service.relay_limits.acquire(&customer_id) {
+        Ok(slot) => slot,
+        Err(error) => return error_response(error, request_id),
+    };
     let _request_slot = match service.try_request_slot() {
         Ok(slot) => slot,
         Err(error) => return error_response(error, request_id),
@@ -118,7 +119,9 @@ async fn live_inner(service: Arc<ConnectService>, request: Request<Body>) -> Res
     }
 
     let upgrade = match axum::extract::WebSocketUpgrade::from_request(request, &()).await {
-        Ok(upgrade) => upgrade,
+        Ok(upgrade) => upgrade
+            .max_message_size(16 * 1024 * 1024)
+            .max_frame_size(16 * 1024 * 1024),
         Err(error) => return error.into_response(),
     };
     let dial = match tiktok_request(&descriptor).inspect_err(|_| {
@@ -127,9 +130,24 @@ async fn live_inner(service: Arc<ConnectService>, request: Request<Body>) -> Res
         Ok(dial) => dial,
         Err(error) => return error_response(error, request_id),
     };
-    let (tiktok, _) = match tokio_tungstenite::connect_async(dial).await {
-        Ok(pair) => pair,
-        Err(error) => {
+    let mut socket_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default();
+    socket_config.max_message_size = Some(16 * 1024 * 1024);
+    socket_config.max_frame_size = Some(16 * 1024 * 1024);
+    socket_config.max_write_buffer_size = 32 * 1024 * 1024;
+    let dial_result = tokio::time::timeout(
+        service.config.request_timeout,
+        tokio_tungstenite::connect_async_with_config(dial, Some(socket_config), false),
+    )
+    .await;
+    let (tiktok, _) = match dial_result {
+        Ok(Ok(pair)) => pair,
+        Err(_) => {
+            return error_response(
+                ApiError::DiscoveryFailed("LIVE socket setup timed out".into()),
+                request_id,
+            )
+        }
+        Ok(Err(error)) => {
             warn!(request_id, unique_id, kind = "tiktok_dial", detail = %short(error.to_string()), "relay dial failed");
             return error_response(
                 ApiError::DiscoveryFailed("TikTok LIVE socket could not be opened".into()),
@@ -138,8 +156,22 @@ async fn live_inner(service: Arc<ConnectService>, request: Request<Body>) -> Res
         }
     };
     info!(request_id, unique_id, room_id, "relay open");
+    let idle_timeout = service.config.relay_idle_timeout;
+    let write_timeout = service.config.relay_write_timeout;
     let mut response = upgrade
-        .on_upgrade(move |browser| relay(browser, tiktok, unique_id, room_id, request_id))
+        .on_upgrade(move |browser| async move {
+            let _relay_slot = relay_slot;
+            relay(
+                browser,
+                tiktok,
+                unique_id,
+                room_id,
+                request_id,
+                idle_timeout,
+                write_timeout,
+            )
+            .await;
+        })
         .into_response();
     response
         .headers_mut()
@@ -156,16 +188,21 @@ async fn relay(
     unique_id: String,
     room_id: String,
     request_id: u64,
+    idle_timeout: std::time::Duration,
+    write_timeout: std::time::Duration,
 ) {
     let (mut browser_tx, mut browser_rx) = browser.split();
     let (mut tiktok_tx, mut tiktok_rx) = tiktok.split();
 
     let up = async {
-        while let Some(message) = browser_rx.next().await {
+        while let Ok(Some(message)) = tokio::time::timeout(idle_timeout, browser_rx.next()).await {
             match message {
                 Ok(message) => {
                     if let Some(message) = to_tiktok(message) {
-                        if tiktok_tx.send(message).await.is_err() {
+                        if !matches!(
+                            tokio::time::timeout(write_timeout, tiktok_tx.send(message)).await,
+                            Ok(Ok(()))
+                        ) {
                             break;
                         }
                     }
@@ -175,11 +212,14 @@ async fn relay(
         }
     };
     let down = async {
-        while let Some(message) = tiktok_rx.next().await {
+        while let Ok(Some(message)) = tokio::time::timeout(idle_timeout, tiktok_rx.next()).await {
             match message {
                 Ok(message) => {
                     if let Some(message) = to_browser(message) {
-                        if browser_tx.send(message).await.is_err() {
+                        if !matches!(
+                            tokio::time::timeout(write_timeout, browser_tx.send(message)).await,
+                            Ok(Ok(()))
+                        ) {
                             break;
                         }
                     }

@@ -357,3 +357,283 @@ test('an authenticated handshake refusal stops reconnecting with the same sessio
   assert.equal(socketCount, 2);
   live.disconnect();
 });
+
+class LifecycleSocket {
+  static instances: LifecycleSocket[] = [];
+  static autoOpen = true;
+  binaryType = '';
+  readonly listeners = new Map<string, Function[]>();
+  constructor() {
+    LifecycleSocket.instances.push(this);
+    if (LifecycleSocket.autoOpen) queueMicrotask(() => this.dispatch('open'));
+  }
+  addEventListener(type: string, listener: Function): void {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+  }
+  send(): void {}
+  close(): void { this.dispatch('close', { code: 1000, reason: 'done' }); }
+  dispatch(type: string, value?: unknown): void {
+    for (const fn of this.listeners.get(type) ?? []) fn(value);
+  }
+}
+function lifecycleClient(): TikTokLive {
+  return new TikTokLive('someone', {
+    roomId: '7300', sessionCookie: 'sessionid=test', fetchGifts: false, fetchRoomInfo: false,
+    signer: { sign: (url) => url },
+    WebSocketImpl: LifecycleSocket as unknown as WebSocketConstructor,
+    reconnect: { initialMs: 5, maxMs: 5, attempts: 2 },
+  });
+}
+
+test('stale sockets cannot close a new connection or emit unhandled errors', async () => {
+  LifecycleSocket.instances = [];
+  const live = lifecycleClient();
+  await live.connect();
+  const old = LifecycleSocket.instances[0]!;
+  live.disconnect();
+  await live.connect();
+  const current = LifecycleSocket.instances[1]!;
+  old.dispatch('close', { code: 1006 });
+  old.dispatch('error', { message: 'stale' });
+  assert.equal(live.connected, true);
+  assert.doesNotThrow(() => current.dispatch('error', { message: 'current' }));
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  assert.equal(LifecycleSocket.instances.length, 2);
+  live.disconnect();
+});
+
+test('disconnect invalidates pending open and allows a new manual connection', async () => {
+  LifecycleSocket.instances = [];
+  LifecycleSocket.autoOpen = false;
+  const live = lifecycleClient();
+  try {
+    const pending = live.connect();
+    const rejected = assert.rejects(pending, /cancelled/);
+    for (let i = 0; i < 10 && LifecycleSocket.instances.length === 0; i++) await Promise.resolve();
+    const old = LifecycleSocket.instances[0]!;
+    assert.ok(old);
+    live.disconnect();
+    await rejected;
+    LifecycleSocket.autoOpen = true;
+    await live.connect();
+    old.dispatch('open');
+    old.dispatch('close', { code: 1006 });
+    assert.equal(live.connected, true);
+    assert.equal(LifecycleSocket.instances.length, 2);
+  } finally {
+    LifecycleSocket.autoOpen = true;
+    live.disconnect();
+  }
+});
+
+test('duplicate close notifications schedule one reconnect and disconnect clears it', async () => {
+  LifecycleSocket.instances = [];
+  const live = lifecycleClient();
+  await live.connect();
+  const old = LifecycleSocket.instances[0]!;
+  old.dispatch('close', { code: 1006 });
+  old.dispatch('close', { code: 1006 });
+  live.disconnect();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(LifecycleSocket.instances.length, 1);
+});
+
+test('a signer that disconnects cannot create a socket after cancellation', async () => {
+  let sockets = 0;
+  class Socket { constructor() { sockets += 1; } }
+  const live = new TikTokLive('@someone', {
+    roomId: '7300000000000000001',
+    sessionCookie: 'sessionid=test; tt_webid_v2=7999000000000000001',
+    fetchGifts: false,
+    fetchRoomInfo: false,
+    signer: { sign(url) { live.disconnect(); return url; } },
+    WebSocketImpl: Socket as unknown as WebSocketConstructor,
+  });
+  await assert.rejects(live.connect(), /cancelled/);
+  assert.equal(sockets, 0);
+});
+
+test('disconnect aborts an in-flight room discovery request', async () => {
+  const original = globalThis.fetch;
+  let signal: AbortSignal | undefined;
+  globalThis.fetch = async (_url, init) => {
+    signal = init?.signal as AbortSignal;
+    return new Promise<Response>((_resolve, reject) => {
+      signal!.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
+    });
+  };
+  const live = new TikTokLive('someone', {
+    sessionCookie: 'sessionid=test', fetchGifts: false, fetchRoomInfo: false,
+    signer: { sign: (url) => url }, WebSocketImpl: LifecycleSocket as unknown as WebSocketConstructor,
+  });
+  try {
+    const connecting = live.connect();
+    for (let i = 0; i < 10 && !signal; i++) await Promise.resolve();
+    assert.ok(signal);
+    live.disconnect();
+    assert.equal(signal.aborted, true);
+    await assert.rejects(connecting, /cancelled/);
+  } finally { live.disconnect(); globalThis.fetch = original; }
+});
+
+test('optional reconnect jitter stays within its configured ceiling', async () => {
+  assert.throws(() => new TikTokLive('someone', { reconnectJitter: NaN }), /reconnectJitter/);
+  const live = new TikTokLive('someone', {
+    roomId: '7300', sessionCookie: 'sessionid=test', fetchGifts: false, fetchRoomInfo: false,
+    signer: { sign: (url) => url }, WebSocketImpl: LifecycleSocket as unknown as WebSocketConstructor,
+    reconnect: { initialMs: 10, maxMs: 12, attempts: 2 }, reconnectJitter: 1,
+  });
+  let delay: number | undefined;
+  live.on('reconnecting', (event) => { delay = event.delayMs; live.disconnect(); });
+  await live.connect();
+  LifecycleSocket.instances.at(-1)!.dispatch('close', { code: 1006 });
+  assert.ok(delay !== undefined && delay >= 10 && delay <= 12);
+  assert.equal(live.connected, false);
+});
+
+test('direct async delivery ACKs before callbacks and terminates on queue saturation', async () => {
+  const { create, toBinary } = await import('@bufbuild/protobuf');
+  const { ProtoMessageFetchResultSchema, BaseProtoMessageSchema } = await import('../dist/gen/webcast/shared/message_pb.js');
+  const { WebcastPushFrameSchema } = await import('../dist/gen/webcast/synthetic_proto_pb.js');
+  let sends = 0;
+  class Socket extends LifecycleSocket { override send(): void { sends++; } }
+  const live = new TikTokLive('someone', {
+    roomId: '7300', sessionCookie: 'sessionid=test', fetchGifts: false, fetchRoomInfo: false,
+    signer: { sign: (url) => url }, WebSocketImpl: Socket as unknown as WebSocketConstructor,
+    eventDelivery: { capacity: 1 },
+  });
+  let callbacks = 0;
+  let errors = 0;
+  live.on('event', () => callbacks++);
+  live.on('error', () => errors++);
+  await live.connect();
+  const before = sends;
+  const payload = toBinary(ProtoMessageFetchResultSchema, create(ProtoMessageFetchResultSchema, {
+    needAck: true, internalExt: 'fixture', messages: [0, 1].map(() => create(BaseProtoMessageSchema, {
+      method: 'WebcastFutureMessage', payload: new Uint8Array([8, 1]),
+    })),
+  }));
+  const frame = toBinary(WebcastPushFrameSchema, create(WebcastPushFrameSchema, { payloadType: 'msg', payload }));
+  LifecycleSocket.instances.at(-1)!.dispatch('message', { data: frame });
+  assert.equal(sends, before + 1);
+  assert.equal(live.connected, false);
+  assert.equal(errors, 1);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(callbacks, 0);
+  assert.equal(live.deliveryMetrics().queueDepth, 0);
+  assert.equal(live.deliveryMetrics().discarded, 2);
+  live.disconnect();
+});
+
+test('cancelled signer initialization cannot replace a newer retained context', async () => {
+  const { Signer } = await import('../dist/signer.js');
+  const original = Signer.create;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let preparations = 0;
+  const urls: string[] = [];
+  class Socket extends LifecycleSocket { constructor(url: string) { super(); urls.push(url); } }
+  Signer.create = async () => {
+    const context = ++preparations;
+    if (context === 1) await gate;
+    return { sign: (url: string) => `${url}&context=${context}` } as unknown as import('../dist/signer.js').Signer;
+  };
+  const live = new TikTokLive('someone', {
+    roomId: '7300', sessionCookie: 'sessionid=test', fetchGifts: false, fetchRoomInfo: false,
+    WebSocketImpl: Socket as unknown as WebSocketConstructor,
+  });
+  try {
+    const first = live.connect();
+    const rejected = assert.rejects(first, /cancelled/);
+    for (let i = 0; i < 10 && preparations === 0; i++) await Promise.resolve();
+    assert.equal(preparations, 1);
+    live.disconnect();
+    await live.connect();
+    release();
+    await rejected;
+    live.disconnect();
+    await live.connect();
+    assert.equal(preparations, 2);
+    assert.equal(urls.length, 2);
+    assert.ok(urls.every((url) => url.endsWith('&context=2')));
+  } finally { release(); live.disconnect(); Signer.create = original; }
+});
+
+test('disconnect aborts guest identity bootstrap before it can create a socket', async () => {
+  const original = globalThis.fetch;
+  let signal: AbortSignal | undefined;
+  globalThis.fetch = async (_url, init) => {
+    signal = init?.signal as AbortSignal;
+    return new Promise<Response>((_resolve, reject) => {
+      signal!.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
+    });
+  };
+  const live = new TikTokLive('someone', {
+    roomId: '7300', sessionCookie: '', fetchGifts: false, fetchRoomInfo: false,
+    signer: { sign: (url) => url }, WebSocketImpl: LifecycleSocket as unknown as WebSocketConstructor,
+  });
+  try {
+    const first = live.connect();
+    const rejected = assert.rejects(first);
+    assert.ok(signal);
+    live.disconnect();
+    assert.equal(signal.aborted, true);
+    await rejected;
+    assert.equal(live.connected, false);
+  } finally { live.disconnect(); globalThis.fetch = original; }
+});
+
+test('ACK write-buffer saturation terminates the direct connection without another send', async () => {
+  const { create, toBinary } = await import('@bufbuild/protobuf');
+  const { ProtoMessageFetchResultSchema } = await import('../dist/gen/webcast/shared/message_pb.js');
+  const { WebcastPushFrameSchema } = await import('../dist/gen/webcast/synthetic_proto_pb.js');
+  let sent = 0, terminated = 0;
+  class Socket extends LifecycleSocket {
+    bufferedAmount = 0;
+    override send(): void { sent++; }
+    terminate(): void { terminated++; }
+  }
+  const live = new TikTokLive('someone', {
+    roomId: '7300', sessionCookie: 'sessionid=test', fetchGifts: false, fetchRoomInfo: false,
+    signer: { sign: (url) => url }, WebSocketImpl: Socket as unknown as WebSocketConstructor,
+    maxBufferedBytes: 1024,
+  });
+  let errors = 0;
+  live.on('error', () => errors++);
+  await live.connect();
+  const before = sent;
+  const socket = LifecycleSocket.instances.at(-1)! as Socket;
+  socket.bufferedAmount = 1024;
+  const payload = toBinary(ProtoMessageFetchResultSchema, create(ProtoMessageFetchResultSchema, { needAck: true }));
+  const frame = toBinary(WebcastPushFrameSchema, create(WebcastPushFrameSchema, { payloadType: 'msg', payload }));
+  socket.dispatch('message', { data: frame });
+  assert.equal(sent, before);
+  assert.equal(live.connected, false);
+  assert.equal(errors, 1);
+  assert.equal(live.deliveryMetrics().writeBufferRejections, 1);
+  assert.equal(terminated, 1);
+});
+
+test('enter-room write rejection fails connection without an unhandled open callback exception', async () => {
+  const live = new TikTokLive('someone', {
+    roomId: '7300', sessionCookie: 'sessionid=test', fetchGifts: false, fetchRoomInfo: false,
+    signer: { sign: (url) => url }, WebSocketImpl: LifecycleSocket as unknown as WebSocketConstructor,
+    maxBufferedBytes: 1,
+  });
+  await assert.rejects(live.connect(), /write buffer/);
+  assert.equal(live.connected, false);
+  assert.equal(live.deliveryMetrics().writeBufferRejections, 1);
+  live.disconnect();
+});
+
+test('an enter-room send exception rejects connect and cleans up the socket', async () => {
+  class Socket extends LifecycleSocket { override send(): void { throw new Error('synthetic send failure'); } }
+  const live = new TikTokLive('someone', {
+    roomId: '7300', sessionCookie: 'sessionid=test', fetchGifts: false, fetchRoomInfo: false,
+    signer: { sign: (url) => url }, WebSocketImpl: Socket as unknown as WebSocketConstructor,
+  });
+  await assert.rejects(live.connect(), /synthetic send failure/);
+  assert.equal(live.connected, false);
+  assert.equal(live.deliveryMetrics().writeBufferRejections, 0);
+  live.disconnect();
+});

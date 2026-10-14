@@ -33,6 +33,9 @@ pub trait LiveSink {
     fn on_state(&self, state: State, detail: &str);
     fn on_error(&self, error: Error, retryable: bool);
     fn on_batch(&self, batch: EventBatch);
+    /// Optional bounded-cardinality observability; default implementations do no work.
+    fn on_decode_duration(&self, _duration: Duration) {}
+    fn on_ack_duration(&self, _duration: Duration) {}
 }
 /// Resolves immediately even if cancellation was signaled before this future.
 pub async fn cancelled(stop: &mut watch::Receiver<bool>) {
@@ -104,7 +107,13 @@ pub async fn run(
                     };
                     match message {
                         Some(Ok(message)) => {
-                            match ttl_live_events::decode_batch(&message.payload) {
+                            if connection.last_ack_was_sent() {
+                                sink.on_ack_duration(connection.last_ack_duration());
+                            }
+                            let started = std::time::Instant::now();
+                            let decoded = ttl_live_events::decode_batch(&message.payload);
+                            sink.on_decode_duration(started.elapsed());
+                            match decoded {
                                 Ok(batch) => sink.on_batch(batch),
                                 Err(_) => sink.on_error(Error::Decode, false),
                             }

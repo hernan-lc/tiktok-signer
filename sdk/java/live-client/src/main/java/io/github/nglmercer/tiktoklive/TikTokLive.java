@@ -29,12 +29,13 @@ public final class TikTokLive implements AutoCloseable {
     private ScheduledFuture<?> heartbeat, reconnect;
     private CompletableFuture<LiveState> pending;
     private WebSocket socket;
-    private long generation, heartbeatInterval;
+    private volatile long generation;
+    private long heartbeatInterval;
     private final java.util.concurrent.atomic.AtomicLong droppedCallbacks =
             new java.util.concurrent.atomic.AtomicLong();
     private int retries;
     private boolean active;
-    private volatile boolean closed;
+    private volatile boolean closed, deliveryStopped;
     private volatile LiveState state;
 
     private TikTokLive(Builder b) {
@@ -56,7 +57,9 @@ public final class TikTokLive implements AutoCloseable {
                                 .build()
                         : b.http;
         api = new ConnectApi(http, b.url, b.key);
-        timers = Executors.newSingleThreadScheduledExecutor(daemon("tiktok-timers"));
+        var timerExecutor = new ScheduledThreadPoolExecutor(1, daemon("tiktok-timers"));
+        timerExecutor.setRemoveOnCancelPolicy(true);
+        timers = timerExecutor;
         events =
                 new ThreadPoolExecutor(
                         1,
@@ -97,6 +100,7 @@ public final class TikTokLive implements AutoCloseable {
             return pending != null && !pending.isDone()
                     ? pending
                     : CompletableFuture.completedFuture(state);
+        deliveryStopped = false;
         active = true;
         retries = 0;
         long token = ++generation;
@@ -249,7 +253,7 @@ public final class TikTokLive implements AutoCloseable {
             if (!frame.getPayloadType().equals("msg")) return;
             var batch = Protocol.batch(frame);
             // ACK runs before event normalization and before any application executor.
-            if (!ws.send(ByteString.of(Protocol.ack(frame, batch.getInternalExt())))) {
+            if (batch.getNeedAck() && !ws.send(ByteString.of(Protocol.ackForBatch(frame, batch.getInternalExt())))) {
                 synchronized (this) {
                     if (valid(token)) fail(token, new SocketException("ACK could not be sent"));
                 }
@@ -361,6 +365,8 @@ public final class TikTokLive implements AutoCloseable {
         boolean wasActive = active;
         active = false;
         ++generation;
+        droppedCallbacks.addAndGet(events.getQueue().size());
+        events.getQueue().clear();
         stopSocket();
         api.cancelPending();
         gifts = Map.of();
@@ -393,35 +399,55 @@ public final class TikTokLive implements AutoCloseable {
         return this;
     }
 
-    private void emit(String name, Object value) {
-        if (closed) return;
+    private synchronized void emit(String name, Object value) {
+        if (closed || deliveryStopped) return;
+        long token = generation;
         try {
             events.execute(
                     () -> {
-                        if (closed) return;
+                        if (closed || deliveryStopped || token != generation) return;
                         for (var listener :
                                 listeners.getOrDefault(name, new CopyOnWriteArrayList<>())) {
                             Runnable invocation =
                                     () -> {
-                                        if (closed) return;
+                                        if (closed || token != generation) return;
                                         try {
                                             listener.accept(value);
                                         } catch (Throwable e) {
-                                            if (!name.equals("error")) emit("error", e);
+                                            if (token == generation && !name.equals("error")) emit("error", e);
                                         }
                                     };
                             try {
                                 if (callback == null) invocation.run();
                                 else callback.execute(invocation);
                             } catch (RuntimeException e) {
-                                if (!name.equals("error")) emit("error", e);
+                                if (token == generation && !name.equals("error")) emit("error", e);
                             }
                         }
                     });
         } catch (RejectedExecutionException overflow) {
-            droppedCallbacks.incrementAndGet();
-            // Bound retained events when a consumer stalls. Protocol acknowledgements continue.
-            // Applications needing lossless delivery must keep callbacks short and forward work.
+            synchronized (this) {
+                if (closed || deliveryStopped) return;
+                deliveryStopped = true;
+                droppedCallbacks.addAndGet(1L + events.getQueue().size());
+                events.getQueue().clear();
+                active = false;
+                ++generation;
+                stopSocket();
+                api.cancelPending();
+                gifts = Map.of();
+                streaks.clear();
+                if (pending != null && !pending.isDone()) pending.cancel(false);
+                state = new LiveState(uniqueId, state.roomId(), state.status(), false);
+                long stoppedGeneration = generation;
+                events.execute(() -> {
+                    if (closed || generation != stoppedGeneration) return;
+                    var failure = new IllegalStateException("Event delivery overloaded; connection stopped");
+                    for (var listener : listeners.getOrDefault("error", new CopyOnWriteArrayList<>())) {
+                        try { listener.accept(failure); } catch (Throwable ignored) { /* Terminal notification. */ }
+                    }
+                });
+            }
         }
     }
 

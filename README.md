@@ -481,6 +481,8 @@ variables, and sessions in production.
 | [11 — WebView removal](docs/11-webview-removal.md) | What the browser did, what replaced it, and what was lost |
 | [12 — Transport reverse engineering](docs/12-transport-reverse-engineering.md) | **How the socket is built and signed**, and the search that preceded it |
 | [13 — Embedded runtime](docs/13-embedded-runtime.md) | Which JS engine can run the signer in-process, measured |
+| [17 — Performance audit](docs/17-performance-audit.md) | Verified issues, regression checks and benchmark measurements |
+| [18 — Resource configuration](docs/18-live-resource-configuration.md) | Queue capacities, overload behavior, callback ownership and metrics |
 
 ## Summary
 

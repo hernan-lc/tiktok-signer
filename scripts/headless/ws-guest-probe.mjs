@@ -45,7 +45,7 @@ const {
   socketQuery,
 } = player;
 const { PRODUCT, Signer } = signerModule;
-const { ackFrame, carriesEvents, decodeBatch, decodePushFrame, decompress } = framesModule;
+const { ackFrameForBatch, carriesEvents, decodeBatch, decodePushFrame, decompress } = framesModule;
 
 const args = process.argv.slice(2);
 const bundlePath = args.shift();
@@ -257,7 +257,7 @@ await new Promise((resolve) => {
       report.eventFrames += 1;
       const batch = decodeBatch(decompress(frame));
       report.decodedEvents += batch.messages.length;
-      if (batch.needAck) socket.send(ackFrame(frame, batch.internalExt));
+      if (batch.needAck) socket.send(ackFrameForBatch(frame, batch.internalExt));
     } catch {
       report.invalidFrames += 1;
     }

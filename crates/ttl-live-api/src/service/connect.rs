@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use serde::Serialize;
-use tokio::sync::{Mutex, OnceCell, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{OnceCell, OwnedSemaphorePermit, Semaphore};
 use tracing::{debug, info, warn};
 
 use crate::cache::RoomCache;
@@ -19,6 +19,26 @@ use super::signer::ConnectionSigner;
 const MAX_UNIQUE_ID_LENGTH: usize = 24;
 
 type ResolutionFlight = Arc<OnceCell<Result<RoomResolution, ResolveFailure>>>;
+
+/// A lease is dropped even when a get_or_init future is cancelled. Only the last
+/// caller removes the matching map entry; siblings can still initialize/read it.
+struct FlightLease<'a> {
+    flights: &'a Mutex<HashMap<String, ResolutionFlight>>,
+    key: &'a str,
+    flight: ResolutionFlight,
+}
+impl Drop for FlightLease<'_> {
+    fn drop(&mut self) {
+        let mut flights = self.flights.lock().unwrap_or_else(|e| e.into_inner());
+        if flights
+            .get(self.key)
+            .is_some_and(|current| Arc::ptr_eq(current, &self.flight))
+            && Arc::strong_count(&self.flight) == 2
+        {
+            flights.remove(self.key);
+        }
+    }
+}
 
 /// The only public identifier accepted by the broker. The canonical form is lower-level TikTok's
 /// username without a leading `@`; room ids never enter this request type.
@@ -128,6 +148,7 @@ pub struct ConnectService {
     pub(crate) api_keys: ApiKeyStore,
     pub(crate) rate_limiter: RateLimiter,
     pub(crate) metrics: Arc<Metrics>,
+    pub(crate) relay_limits: Arc<crate::limiter::RelayLimits>,
     request_ids: AtomicU64,
 }
 
@@ -149,7 +170,13 @@ impl ConnectService {
         metrics
             .signer_capacity
             .store(config.max_concurrent_signs as u64, Ordering::Relaxed);
+        let relay_limits = crate::limiter::RelayLimits::new(
+            config.max_active_relays,
+            config.max_relays_per_customer,
+            metrics.clone(),
+        );
         Arc::new(Self {
+            relay_limits,
             cache: RoomCache::new(
                 config.room_cache_ttl,
                 config.offline_cache_ttl,
@@ -316,24 +343,29 @@ impl ConnectService {
             .discovery_cache_misses_total
             .fetch_add(1, Ordering::Relaxed);
 
-        let flight = {
-            let mut flights = self.flights.lock().await;
-            flights
-                .entry(unique_id.to_owned())
-                .or_insert_with(|| Arc::new(OnceCell::new()))
-                .clone()
+        let lease = FlightLease {
+            flights: &self.flights,
+            key: unique_id,
+            flight: {
+                let mut flights = self.flights.lock().unwrap_or_else(|e| e.into_inner());
+                if !flights.contains_key(unique_id)
+                    && flights.len() >= self.config.max_concurrent_requests
+                {
+                    return Err(ResolveFailure::Capacity.into());
+                }
+                flights
+                    .entry(unique_id.to_owned())
+                    .or_insert_with(|| Arc::new(OnceCell::new()))
+                    .clone()
+            },
         };
-        // Known benign race, documented deliberately: the cache check above and this join
-        // are not atomic with another flight's completion, so a request that missed just
-        // before a sibling populated the cache can start a second discovery for the same
-        // creator. Both flights resolve the same value and the cache absorbs it, so this
-        // is one redundant upstream request in unusual scheduling — an optimization
-        // footnote, not a correctness issue. Closing it would need a post-join cache
-        // re-check plus cleanup of the unused cell, which is more concurrency machinery
-        // than a rare duplicate lookup justifies.
-
-        let result = flight
+        let result = lease
+            .flight
             .get_or_init(|| async {
+                // Another flight may have filled the cache after our initial miss.
+                if let Some(value) = self.cache.get(unique_id).await {
+                    return Ok(value);
+                }
                 let _slot = self
                     .discovery_slots
                     .clone()
@@ -362,18 +394,6 @@ impl ConnectService {
             })
             .await
             .clone();
-
-        // Completed flights are removed, but callers already holding the Arc can finish reading
-        // their shared result. The pointer check prevents a late cleanup from deleting a newer
-        // flight for the same creator.
-        let mut flights = self.flights.lock().await;
-        if flights
-            .get(unique_id)
-            .is_some_and(|current| Arc::ptr_eq(current, &flight))
-        {
-            flights.remove(unique_id);
-        }
-        drop(flights);
 
         match result {
             Ok(RoomResolution::NotFound) => Err(ApiError::UserNotFound),
@@ -482,6 +502,39 @@ mod tests {
         }
     }
 
+    struct GatedResolver {
+        entered: tokio::sync::Notify,
+    }
+    impl RoomResolver for GatedResolver {
+        fn resolve(&self, _: String) -> ServiceFuture<'_, Result<RoomResolution, ResolveFailure>> {
+            Box::pin(async move {
+                self.entered.notify_one();
+                std::future::pending().await
+            })
+        }
+    }
+    #[tokio::test]
+    async fn cancelled_discovery_removes_flights_and_releases_permits() {
+        let resolver = Arc::new(GatedResolver {
+            entered: tokio::sync::Notify::new(),
+        });
+        let service =
+            ConnectService::new(resolver.clone(), Arc::new(MockSigner), AppConfig::default());
+        for index in 0..20 {
+            let cloned = service.clone();
+            let task =
+                tokio::spawn(async move { cloned.resolve(&format!("creator{index}"), 1).await });
+            resolver.entered.notified().await;
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+            assert!(service.flights.lock().unwrap().is_empty());
+            assert_eq!(
+                service.discovery_slots.available_permits(),
+                service.config.max_concurrent_discovery
+            );
+        }
+    }
+
     struct MockSigner;
 
     impl ConnectionSigner for MockSigner {
@@ -524,6 +577,46 @@ mod tests {
             Arc::new(MockSigner),
             config,
         )
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "offline broker concurrency benchmark"]
+    async fn offline_broker_concurrency_benchmark() {
+        for concurrency in [10, 100, 1000] {
+            let calls = Arc::new(AtomicU64::new(0));
+            let service = service(calls.clone());
+            let before = Instant::now();
+            let mut tasks = tokio::task::JoinSet::new();
+            for index in 0..concurrency {
+                let service = service.clone();
+                tasks.spawn(async move {
+                    let started = Instant::now();
+                    let result = service
+                        .connect(&format!("creator{index}"), "anonymous", 1)
+                        .await;
+                    (started.elapsed().as_nanos(), result.is_ok())
+                });
+            }
+            let mut samples = Vec::new();
+            let mut accepted = 0;
+            while let Some(result) = tasks.join_next().await {
+                let (duration, ok) = result.unwrap();
+                samples.push(duration);
+                accepted += usize::from(ok);
+            }
+            samples.sort_unstable();
+            assert!(service.flights.lock().unwrap().is_empty());
+            assert_eq!(
+                service.discovery_slots.available_permits(),
+                service.config.max_concurrent_discovery
+            );
+            assert_eq!(
+                service.signing_slots.available_permits(),
+                service.config.max_concurrent_signs
+            );
+            println!("concurrency={concurrency} accepted={accepted} rejected={} elapsed_ns={} request_ns_p50={} request_ns_p95={} request_ns_p99={} discovery_calls={}",
+                concurrency-accepted, before.elapsed().as_nanos(), samples[concurrency/2], samples[concurrency*95/100], samples[concurrency*99/100], calls.load(Ordering::Relaxed));
+        }
     }
 
     #[test]

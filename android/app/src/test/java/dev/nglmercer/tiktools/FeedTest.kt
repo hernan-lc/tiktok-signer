@@ -10,6 +10,28 @@ import org.junit.Test
 class FeedTest {
 
     @Test
+    fun guestCookieRetentionIsBoundedAndOverflowKeepsPriorIdentity() {
+        fun connection(headers: List<String>) = object : java.net.HttpURLConnection(java.net.URL("https://example.invalid")) {
+            override fun disconnect() {}
+            override fun usingProxy() = false
+            override fun connect() {}
+            override fun getHeaderFields(): Map<String, List<String>> = mapOf("Set-Cookie" to headers)
+        }
+        val jar = Feed.GuestSession()
+        jar.absorb(connection(listOf("ttwid=original; Path=/")))
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+            jar.absorb(connection((0..256).map { "cookie$it=value" }))
+        }
+        assertEquals("ttwid=original", jar.cookieHeader())
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+            jar.absorb(connection(listOf("huge=" + "x".repeat(65536))))
+        }
+        assertEquals(listOf("ttwid"), jar.cookieNames())
+        jar.clear()
+        assertTrue(jar.isEmpty())
+    }
+
+    @Test
     fun searchUrlCarriesKeywordOffsetAndCount() {
         val url = Feed.liveSearchUrl("live music", 20)
         assertTrue(url, url.startsWith("https://www.tiktok.com/api/search/live/full/?"))

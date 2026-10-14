@@ -27,3 +27,13 @@ proxies the event stream.
 
 The canonical unique id is the handle without `@`; both input spellings are accepted. Room IDs and
 signing parameters are intentionally not accepted as SDK options.
+
+### Delivery and shutdown limits
+
+Use `eventDelivery: { capacity: 1024, maxBytes: 64 * 1024 * 1024 }` for optional
+bounded ordered asynchronous delivery; synchronous delivery remains the default.
+Overflow stops the connection with an error. `deliveryMetrics()` exposes queue and
+delivery counters plus listener failures. Disconnect aborts pending broker/gift
+HTTP requests, invalidates stale sockets and clears heartbeat/reconnect/delivery
+timers. Broker response bodies are capped at 1 MiB; LIVE frame/batch limits are
+16 MiB / 8192 messages. See [resource configuration](../../docs/18-live-resource-configuration.md).

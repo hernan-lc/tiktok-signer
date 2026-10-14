@@ -1,0 +1,39 @@
+{
+  "kind": "public player-code reference; not a captured WebSocket session",
+  "retrieved_on": "2026-10-13",
+  "source_url": "https://sf16-website-login.neutral.ttwstatic.com/obj/tiktok_web_login_static/tiktok/webapp/live_new/static/js/async/40231.bb2ae73c07.js",
+  "source_sha256": "6a655f4f4953374001192984abdd4121038737daded32499c4e3581ec5b60177",
+  "facts": {
+    "batch_need_ack_field": 9,
+    "batch_internal_ext_field": 5,
+    "send_ack_only_when_need_ack_is_true": true,
+    "ack_log_id_from_incoming_frame": true,
+    "ack_extension_from_current_batch": true,
+    "empty_extension_omits_payload": true
+  },
+  "synthetic_cases": [
+    {
+      "need_ack": false,
+      "extension": "current",
+      "log_id": 42,
+      "send_ack": false,
+      "ack_hex": null
+    },
+    {
+      "need_ack": true,
+      "extension": "current",
+      "log_id": 43,
+      "send_ack": true,
+      "payload_utf8": "current",
+      "ack_hex": "102b320270623a0361636b420763757272656e74"
+    },
+    {
+      "need_ack": true,
+      "extension": "",
+      "log_id": 44,
+      "send_ack": true,
+      "payload_utf8": "",
+      "ack_hex": "102c320270623a0361636b"
+    }
+  ]
+}
