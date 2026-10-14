@@ -8,6 +8,9 @@ import { asError, isRetryable, LiveApiError, ProtocolError, SocketError } from '
 import { boundedHeartbeatMs, startHeartbeat } from './heartbeat.js';
 import { DEFAULT_RECONNECT, reconnectDelay } from './reconnect.js';
 import {
+  SocketWriteOverflowError,
+  sendBoundedFrame,
+  writeBufferLimit,
   ackFrameForBatch,
   carriesEvents,
   decodeBatch,
@@ -36,6 +39,8 @@ const OPEN_TIMEOUT_MS = 15_000;
 
 export interface TikTokLiveOptions extends ConnectApiOptions {
   eventDelivery?: DeliveryOptions;
+  /** Pending WebSocket write bytes, 32 MiB by default. */
+  maxBufferedBytes?: number;
   /** Fetch the room gift catalog directly from TikTok once per live descriptor. */
   fetchGifts?: boolean;
   reconnect?: Partial<ReconnectPolicy>;
@@ -100,13 +105,16 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   #generation = 0;
   #connectAbort: AbortController | null = null;
   #listenerErrors = 0;
+  #writeBufferRejections = 0;
   readonly #delivery: EventDelivery<LiveEvent>;
+  readonly #maxBufferedBytes: number;
   #cancelOpen: (() => void) | null = null;
   #attempt = 0;
   #gifts = new Map<string, Gift>();
 
   constructor(uniqueId: string, options: TikTokLiveOptions = {}) {
     super();
+    this.#maxBufferedBytes = writeBufferLimit(options.maxBufferedBytes);
     this.#delivery = new EventDelivery(options.eventDelivery,
       (event, generation) => this.#dispatch(event, generation),
       (error) => { this.disconnect(); this.#emitError(error); });
@@ -184,6 +192,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
       } catch {
         // The peer may already have closed it.
       }
+      try { socket.terminate?.(); } catch { /* Already closed. */ }
     }
   }
 
@@ -269,7 +278,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
           return;
         }
         try {
-          socket.send(enterRoomFrame({ roomId }));
+          this.#send(socket, enterRoomFrame({ roomId }));
         } catch (error) {
           settled = true;
           clearTimeout(timer);
@@ -355,7 +364,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     // TikTok push server decide this client is dead.
     if (batch.needAck) {
       try {
-        socket.send(ackFrameForBatch(frame, batch.internalExt));
+        this.#send(socket, ackFrameForBatch(frame, batch.internalExt));
       } catch (error) {
         this.#emitError(error);
       }
@@ -388,7 +397,10 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   #startHeartbeat(socket: WebSocketLike, roomId: string, everyMs: number): void {
     this.#stopHeartbeat();
     this.#heartbeat = startHeartbeat(roomId, everyMs, (frame) => {
-      if (this.#socket === socket) socket.send(frame);
+      if (this.#socket === socket) {
+        try { this.#send(socket, frame); }
+        catch (error) { if (error instanceof SocketWriteOverflowError) this.#emitError(error); throw error; }
+      }
     });
   }
 
@@ -441,8 +453,8 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     this.#notify(() => this.emit('offline'));
   }
 
-  deliveryMetrics(): DeliveryMetrics & { listenerErrors: number } {
-    return { ...this.#delivery.metrics(), listenerErrors: this.#listenerErrors };
+  deliveryMetrics(): DeliveryMetrics & { listenerErrors: number; writeBufferRejections: number } {
+    return { ...this.#delivery.metrics(), listenerErrors: this.#listenerErrors, writeBufferRejections: this.#writeBufferRejections };
   }
 
   #dispatch(event: LiveEvent, generation: number): boolean {
@@ -471,6 +483,11 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
       case EVENT.roomUser: this.emit('roomUser', event); break;
       case EVENT.unknown: this.emit('unknown', event); break;
     }
+  }
+
+  #send(socket: WebSocketLike, frame: ArrayBuffer | ArrayBufferView): void {
+    try { sendBoundedFrame(socket, frame, this.#maxBufferedBytes); }
+    catch (error) { if (error instanceof SocketWriteOverflowError) { this.#writeBufferRejections++; this.#cancelOpen = null; this.disconnect(); } throw error; }
   }
 
   #emitError(error: unknown): void {

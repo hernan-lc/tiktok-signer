@@ -582,3 +582,58 @@ test('disconnect aborts guest identity bootstrap before it can create a socket',
     assert.equal(live.connected, false);
   } finally { live.disconnect(); globalThis.fetch = original; }
 });
+
+test('ACK write-buffer saturation terminates the direct connection without another send', async () => {
+  const { create, toBinary } = await import('@bufbuild/protobuf');
+  const { ProtoMessageFetchResultSchema } = await import('../dist/gen/webcast/shared/message_pb.js');
+  const { WebcastPushFrameSchema } = await import('../dist/gen/webcast/synthetic_proto_pb.js');
+  let sent = 0, terminated = 0;
+  class Socket extends LifecycleSocket {
+    bufferedAmount = 0;
+    override send(): void { sent++; }
+    terminate(): void { terminated++; }
+  }
+  const live = new TikTokLive('someone', {
+    roomId: '7300', sessionCookie: 'sessionid=test', fetchGifts: false, fetchRoomInfo: false,
+    signer: { sign: (url) => url }, WebSocketImpl: Socket as unknown as WebSocketConstructor,
+    maxBufferedBytes: 1024,
+  });
+  let errors = 0;
+  live.on('error', () => errors++);
+  await live.connect();
+  const before = sent;
+  const socket = LifecycleSocket.instances.at(-1)! as Socket;
+  socket.bufferedAmount = 1024;
+  const payload = toBinary(ProtoMessageFetchResultSchema, create(ProtoMessageFetchResultSchema, { needAck: true }));
+  const frame = toBinary(WebcastPushFrameSchema, create(WebcastPushFrameSchema, { payloadType: 'msg', payload }));
+  socket.dispatch('message', { data: frame });
+  assert.equal(sent, before);
+  assert.equal(live.connected, false);
+  assert.equal(errors, 1);
+  assert.equal(live.deliveryMetrics().writeBufferRejections, 1);
+  assert.equal(terminated, 1);
+});
+
+test('enter-room write rejection fails connection without an unhandled open callback exception', async () => {
+  const live = new TikTokLive('someone', {
+    roomId: '7300', sessionCookie: 'sessionid=test', fetchGifts: false, fetchRoomInfo: false,
+    signer: { sign: (url) => url }, WebSocketImpl: LifecycleSocket as unknown as WebSocketConstructor,
+    maxBufferedBytes: 1,
+  });
+  await assert.rejects(live.connect(), /write buffer/);
+  assert.equal(live.connected, false);
+  assert.equal(live.deliveryMetrics().writeBufferRejections, 1);
+  live.disconnect();
+});
+
+test('an enter-room send exception rejects connect and cleans up the socket', async () => {
+  class Socket extends LifecycleSocket { override send(): void { throw new Error('synthetic send failure'); } }
+  const live = new TikTokLive('someone', {
+    roomId: '7300', sessionCookie: 'sessionid=test', fetchGifts: false, fetchRoomInfo: false,
+    signer: { sign: (url) => url }, WebSocketImpl: Socket as unknown as WebSocketConstructor,
+  });
+  await assert.rejects(live.connect(), /synthetic send failure/);
+  assert.equal(live.connected, false);
+  assert.equal(live.deliveryMetrics().writeBufferRejections, 0);
+  live.disconnect();
+});

@@ -50,6 +50,9 @@ export interface WebSocketOptions {
 }
 
 export interface WebSocketLike {
+  /** Standard sockets expose pending write bytes; custom adapters must bound their own queues. */
+  readonly bufferedAmount?: number;
+  terminate?(): void;
   binaryType: string;
   send(data: string | ArrayBuffer | ArrayBufferView): void;
   close(): void;

@@ -15,7 +15,7 @@ import fs from 'node:fs';
 
 import { Discovery } from './discovery.js';
 import { EVENT, decodeEvent } from './events.js';
-import { ackFrameForBatch, carriesEvents, decodeBatch, decodePushFrame, decompress } from './frames.js';
+import { SocketWriteOverflowError, sendBoundedFrame, writeBufferLimit, ackFrameForBatch, carriesEvents, decodeBatch, decodePushFrame, decompress } from './frames.js';
 import {
   IDENTITY, PATH, SOCKET_HOST, enterRoomFrame, heartbeatFrame, socketConfig, socketQuery,
 } from './player.js';
@@ -75,6 +75,8 @@ class HandshakeRejectedError extends Error {
 
 export interface TikTokLiveOptions {
   eventDelivery?: DeliveryOptions;
+  /** Pending WebSocket write bytes, 32 MiB by default. */
+  maxBufferedBytes?: number;
   sessionCookie?: string;
   userAgent?: string;
   roomId?: string;
@@ -153,13 +155,16 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   #generation = 0;
   #connectAbort: AbortController | null = null;
   #listenerErrors = 0;
+  #writeBufferRejections = 0;
   readonly #delivery: EventDelivery<LiveEvent>;
+  readonly #maxBufferedBytes: number;
   #cancelOpen: (() => void) | null = null;
   #attempt = 0;
 
   /// `uniqueId` is the `@handle`. Everything else has a working default.
   constructor(uniqueId: string, options: TikTokLiveOptions = {}) {
     super();
+    this.#maxBufferedBytes = writeBufferLimit(options.maxBufferedBytes);
     this.#delivery = new EventDelivery(options.eventDelivery,
       (event, generation) => this.#dispatch(event, generation),
       (error) => { this.disconnect(); this.#emitError(error); });
@@ -323,11 +328,13 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     if (this.#reconnectTimer) clearTimeout(this.#reconnectTimer);
     this.#reconnectTimer = null;
     this.#stopHeartbeat();
+    const socket = this.#socket;
     try {
-      this.#socket?.close();
+      socket?.close();
     } catch {
       // Already gone.
     }
+    try { socket?.terminate?.(); } catch { /* Already closed. */ }
     this.#socket = null;
     this.connected = false;
   }
@@ -409,7 +416,16 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
         opened = true;
         // The server pushes nothing until the client says which room it is in. A socket that
         // opened and stayed silent is almost always a missing enter-room frame.
-        socket.send(enterRoomFrame({ roomId: this.roomId, identity: config.identity }));
+        try {
+          this.#send(socket, enterRoomFrame({ roomId: this.roomId, identity: config.identity }));
+        } catch (error) {
+          settled = true;
+          clearTimeout(timer);
+          this.#cancelOpen = null;
+          this.disconnect();
+          reject(error);
+          return;
+        }
         this.#startHeartbeat(Number(config.heartbeatDuration));
         this.connected = true;
         this.#attempt = 0;
@@ -506,7 +522,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     // seconds later, and a slow listener must not be able to cause that.
     if (batch.needAck) {
       try {
-        this.#socket?.send(ackFrameForBatch(frame, batch.internalExt));
+        if (this.#socket) this.#send(this.#socket, ackFrameForBatch(frame, batch.internalExt));
       } catch (error) {
         this.#emitError(error);
       }
@@ -544,8 +560,9 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     // pings are not answered.
     this.#heartbeat = setInterval(() => {
       try {
-        this.#socket?.send(heartbeatFrame(this.roomId));
-      } catch {
+        if (this.#socket) this.#send(this.#socket, heartbeatFrame(this.roomId));
+      } catch (error) {
+        if (error instanceof SocketWriteOverflowError) this.#emitError(error);
         // The close handler deals with a dead socket.
       }
     }, everyMs || 10_000);
@@ -614,14 +631,19 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     }
   }
 
+  #send(socket: WebSocketLike, frame: ArrayBuffer | ArrayBufferView): void {
+    try { sendBoundedFrame(socket, frame, this.#maxBufferedBytes); }
+    catch (error) { if (error instanceof SocketWriteOverflowError) { this.#writeBufferRejections++; this.#cancelOpen = null; this.disconnect(); } throw error; }
+  }
+
   #emitError(error: unknown): void {
     if (this.listenerCount('error') > 0) {
       try { this.emit('error', toError(error)); } catch { this.#listenerErrors++; }
     }
   }
 
-  deliveryMetrics(): DeliveryMetrics & { listenerErrors: number } {
-    return { ...this.#delivery.metrics(), listenerErrors: this.#listenerErrors };
+  deliveryMetrics(): DeliveryMetrics & { listenerErrors: number; writeBufferRejections: number } {
+    return { ...this.#delivery.metrics(), listenerErrors: this.#listenerErrors, writeBufferRejections: this.#writeBufferRejections };
   }
 
   #dispatch(event: LiveEvent, generation: number): boolean {

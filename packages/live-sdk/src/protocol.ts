@@ -3,6 +3,9 @@
 // and enter-room/heartbeat encoders all remain in packages/tiktok-live.
 
 export {
+  SocketWriteOverflowError,
+  sendBoundedFrame,
+  writeBufferLimit,
   ackFrame,
   ackFrameForBatch,
   carriesEvents,

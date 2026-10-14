@@ -1,3 +1,4 @@
+import type { WebSocketLike } from './types.js';
 // The transport envelope: generated protobuf decoding plus small transport helpers.
 //
 // Every WebSocket message is a generated `WebcastPushFrame`. Only `payload_type: "msg"` carries
@@ -25,6 +26,19 @@ export const MESSAGE_PAYLOAD_TYPE = 'msg';
 const COMPRESS_TYPE_HEADER = 'compress_type';
 
 // Align offline batch limits with Rust; check before generated protobuf allocation.
+export class SocketWriteOverflowError extends Error {}
+export function writeBufferLimit(value = 32 * 1024 * 1024): number {
+  if (!Number.isSafeInteger(value) || value <= 0) throw new RangeError('maxBufferedBytes must be a positive safe integer');
+  return value;
+}
+export function sendBoundedFrame(socket: WebSocketLike, data: ArrayBuffer | ArrayBufferView, limit: number): void {
+  const queued = socket.bufferedAmount ?? 0;
+  if (!Number.isFinite(queued) || queued < 0 || data.byteLength > limit - queued) {
+    throw new SocketWriteOverflowError('WebSocket write buffer exceeded its configured capacity');
+  }
+  socket.send(data);
+}
+
 export const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 export const MAX_BATCH_BYTES = 16 * 1024 * 1024;
 export const MAX_BATCH_MESSAGES = 8192;

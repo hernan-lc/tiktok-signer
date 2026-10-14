@@ -339,3 +339,24 @@ test('disconnect aborts an in-flight broker request', async () => {
   assert.equal(signal.aborted, true);
   await assert.rejects(connecting, /cancelled/);
 });
+
+test('ACK write-buffer saturation terminates the broker SDK connection', async () => {
+  class Socket extends FakeWebSocket { bufferedAmount = 0; }
+  const live = new TikTokLive('creator', {
+    fetchImpl: async () => liveResponse(), WebSocketImpl: Socket,
+    maxBufferedBytes: 1024,
+  });
+  let errors = 0;
+  live.on('error', () => errors++);
+  await live.connect();
+  const socket = FakeWebSocket.instances.at(-1)! as Socket;
+  const before = socket.sent.length;
+  socket.bufferedAmount = 1024;
+  const payload = toBinary(ProtoMessageFetchResultSchema, create(ProtoMessageFetchResultSchema, { needAck: true }));
+  const frame = toBinary(WebcastPushFrameSchema, create(WebcastPushFrameSchema, { payloadType: 'msg', payload }));
+  socket.dispatch('message', { data: frame });
+  assert.equal(socket.sent.length, before);
+  assert.equal(live.connected, false);
+  assert.equal(errors, 1);
+  assert.equal(live.deliveryMetrics().writeBufferRejections, 1);
+});

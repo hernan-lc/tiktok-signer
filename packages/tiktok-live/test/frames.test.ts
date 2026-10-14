@@ -6,6 +6,8 @@ import { gzipSync } from 'node:zlib';
 
 import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
 import {
+  sendBoundedFrame,
+  writeBufferLimit,
   ackFrame,
   ackFrameForBatch,
   carriesEvents,
@@ -207,4 +209,15 @@ test('per-batch ACK bytes match the shared public-player reference fixture', asy
       assert.equal(ackFrameForBatch(frame, batch.internalExt).toString('hex'), item.ack_hex);
     }
   }
+});
+
+test('write buffer preflight accounts for pending bytes and rejects before sending', () => {
+  let sent = 0;
+  const socket = { bufferedAmount: 8, send() { sent++; } } as unknown as import('../dist/types.js').WebSocketLike;
+  sendBoundedFrame(socket, new Uint8Array(4), 12);
+  assert.equal(sent, 1);
+  assert.throws(() => sendBoundedFrame(socket, new Uint8Array(5), 12), /write buffer/);
+  assert.equal(sent, 1);
+  assert.throws(() => writeBufferLimit(Infinity), /maxBufferedBytes/);
+  assert.throws(() => writeBufferLimit(0), /maxBufferedBytes/);
 });
