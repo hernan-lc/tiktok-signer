@@ -4,8 +4,8 @@ import java.util.Locale
 
 /** How a chat comment is prepared before any speech engine reads it. */
 data class SanitizerSettings(
-    /** Remove bracketed tokens whose shortcode is in the recognised catalog. */
-    val removeKnownEmotes: Boolean = true,
+    /** Remove bracketed tokens that the event's own metadata confirms are emotes. */
+    val removeConfirmedEmotes: Boolean = true,
     /** Strip Unicode emoji. Off by default: `Hello 😂` is spoken as sent. */
     val removeUnicodeEmoji: Boolean = false,
     /** Collapse runs of whitespace and trim the result. */
@@ -15,16 +15,16 @@ data class SanitizerSettings(
 )
 
 /**
- * The shortcodes this build recognises as graphical emotes.
+ * Candidate shortcodes seen in the wild, kept for documentation only.
  *
- * These are **provisional**: they were not confirmed against captured LIVE traffic, and TikTok
- * does not document them. They are treated as candidates rather than facts, which is why the
- * sanitizer only removes a token that appears in this set — a name that turns out to be a normal
- * word would otherwise silently delete real text. Verified structured metadata (a shortcode on the
- * event itself) is unioned in by the caller and always wins.
+ * These are **provisional**: they were never confirmed against captured LIVE traffic, and TikTok
+ * does not document them. They are deliberately **not** consulted by [TikTokSpeechSanitizer] — a
+ * guess that turns out to be a normal word would silently delete real text from what a viewer
+ * hears. Only a shortcode carried by the event itself (or a future confirmed mapping) is ever
+ * removed.
  */
 object EmoteCatalog {
-    val known: Set<String> = setOf(
+    val provisional: Set<String> = setOf(
         "laughcry",
         "happy",
         "wow",
@@ -43,8 +43,8 @@ object EmoteCatalog {
  * ever handed to a [Speaker], so displays and logs keep the original comment.
  *
  * Unknown bracketed text is preserved on purpose. `[1,2,3]` and `[test]` are not emotes, and a
- * blanket `\[[^]]+]\]` deletion would destroy both — only shortcodes present in the catalog (or in
- * the event's own metadata) are removed.
+ * blanket `\[[^]]+\]` deletion would destroy both. The provisional [EmoteCatalog] is not trusted:
+ * only shortcodes confirmed by the event's own metadata (or a future verified mapping) are removed.
  */
 object TikTokSpeechSanitizer {
 
@@ -54,27 +54,29 @@ object TikTokSpeechSanitizer {
     /**
      * @param text the original chat comment
      * @param settings which cleanups are enabled
-     * @param knownShortcodes shortcodes confirmed by structured event metadata; unioned with
-     *   [EmoteCatalog.known]
+     * @param confirmedShortcodes shortcodes confirmed by structured event metadata; these, and only
+     *   these, are removed
      */
     fun sanitize(
         text: String,
         settings: SanitizerSettings,
-        knownShortcodes: Set<String> = emptySet(),
+        confirmedShortcodes: Set<String> = emptySet(),
     ): String {
         var result = text
-        if (settings.removeKnownEmotes) result = removeKnownEmotes(result, knownShortcodes)
+        if (settings.removeConfirmedEmotes && confirmedShortcodes.isNotEmpty()) {
+            result = removeConfirmedEmotes(result, confirmedShortcodes)
+        }
         if (settings.removeUnicodeEmoji) result = removeEmoji(result)
         if (settings.collapseWhitespace) result = collapseWhitespace(result)
         return result
     }
 
-    private fun removeKnownEmotes(text: String, knownShortcodes: Set<String>): String {
+    private fun removeConfirmedEmotes(text: String, confirmedShortcodes: Set<String>): String {
         if (!text.contains('[')) return text
-        val catalog = if (knownShortcodes.isEmpty()) EmoteCatalog.known else EmoteCatalog.known + knownShortcodes
+        val confirmed = confirmedShortcodes.mapTo(HashSet()) { it.trim().lowercase(Locale.ROOT) }
         return TOKEN.replace(text) { match ->
             val name = match.groupValues[1].trim().lowercase(Locale.ROOT)
-            if (name in catalog) "" else match.value
+            if (name in confirmed) "" else match.value
         }
     }
 
@@ -97,25 +99,91 @@ object TikTokSpeechSanitizer {
         return builder.toString()
     }
 
-    /**
-     * Uncodepoints that are unambiguously emoji. Zero-width joiners and non-joiners are left alone:
-     * they are meaningful in several writing systems, and deleting them to tidy an emoji sequence
-     * would corrupt valid text.
-     */
-    private fun isEmoji(codePoint: Int): Boolean =
+    /** A code point that starts an emoji: the base of a sequence, never an optional modifier. */
+    private fun isEmojiBase(codePoint: Int): Boolean =
         codePoint in 0x1F000..0x1FAFF ||
             codePoint in 0x2600..0x27BF ||
             codePoint in 0x2B00..0x2BFF ||
-            codePoint in 0xFE00..0xFE0F
+            codePoint in 0xFE00..0xFE0F ||
+            codePoint in 0xE0100..0xE01EF
 
+    private fun isRegionalIndicator(codePoint: Int): Boolean = codePoint in 0x1F1E6..0x1F1FF
+
+    private fun isSkinTone(codePoint: Int): Boolean = codePoint in 0x1F3FB..0x1F3FF
+
+    private fun isVariationSelector(codePoint: Int): Boolean =
+        codePoint in 0xFE00..0xFE0F || codePoint in 0xE0100..0xE01EF
+
+    private fun isKeycapBase(codePoint: Int): Boolean =
+        codePoint in 0x30..0x39 || codePoint == 0x23 || codePoint == 0x2A
+
+    /**
+     * Removes whole emoji sequences, not lone code points: a flag keeps its pair of regional
+     * indicators, a skin tone stays with its base, a keycap keeps `FE0F 20E3`, and a ZWJ family is
+     * removed as one unit.
+     *
+     * Zero-width joiners and non-joiners are meaningful in several writing systems and are never
+     * stripped on their own. A ZWJ is only consumed when it actually joins two emoji; `a\u200Db`
+     * therefore survives untouched. Combining marks and multilingual text are left alone because
+     * their code points are not emoji bases.
+     */
     private fun removeEmoji(text: String): String {
         val builder = StringBuilder(text.length)
         var index = 0
         while (index < text.length) {
             val codePoint = text.codePointAt(index)
-            if (!isEmoji(codePoint)) builder.appendCodePoint(codePoint)
-            index += Character.charCount(codePoint)
+            if (isKeycapSequenceAt(text, index)) {
+                index = consumeKeycap(text, index)
+            } else if (isEmojiBase(codePoint)) {
+                index = consumeEmojiCluster(text, index)
+            } else {
+                builder.appendCodePoint(codePoint)
+                index += Character.charCount(codePoint)
+            }
         }
         return builder.toString()
+    }
+
+    /** A digit, `#` or `*` followed by an optional `FE0F` and a combining enclosing keycap. */
+    private fun isKeycapSequenceAt(text: String, index: Int): Boolean {
+        val base = text.codePointAt(index)
+        if (!isKeycapBase(base)) return false
+        var cursor = index + Character.charCount(base)
+        if (cursor < text.length && text.codePointAt(cursor) == 0xFE0F) cursor += 1
+        return cursor < text.length && text.codePointAt(cursor) == 0x20E3
+    }
+
+    private fun consumeKeycap(text: String, index: Int): Int {
+        var cursor = index + 1
+        if (cursor < text.length && text.codePointAt(cursor) == 0xFE0F) cursor += 1
+        if (cursor < text.length && text.codePointAt(cursor) == 0x20E3) cursor += 1
+        return cursor
+    }
+
+    /** Consumes one emoji base plus its modifiers, regional-indicator pair and ZWJ continuations. */
+    private fun consumeEmojiCluster(text: String, index: Int): Int {
+        var cursor = index + Character.charCount(text.codePointAt(index))
+        if (isRegionalIndicator(text.codePointAt(index))) {
+            if (cursor < text.length && isRegionalIndicator(text.codePointAt(cursor))) {
+                cursor += Character.charCount(text.codePointAt(cursor))
+            }
+        }
+        while (cursor < text.length) {
+            val codePoint = text.codePointAt(cursor)
+            when {
+                isSkinTone(codePoint) || isVariationSelector(codePoint) || codePoint == 0x20E3 ->
+                    cursor += Character.charCount(codePoint)
+                codePoint == 0x200D -> {
+                    val next = cursor + 1
+                    if (next < text.length && isEmojiBase(text.codePointAt(next))) {
+                        cursor = next + Character.charCount(text.codePointAt(next))
+                    } else {
+                        break
+                    }
+                }
+                else -> break
+            }
+        }
+        return cursor
     }
 }

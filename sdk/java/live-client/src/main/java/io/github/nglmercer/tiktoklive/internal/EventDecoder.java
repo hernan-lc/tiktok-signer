@@ -2,6 +2,8 @@ package io.github.nglmercer.tiktoklive.internal;
 
 import io.github.nglmercer.tiktoklive.*;
 
+import okhttp3.HttpUrl;
+
 import webcast.model.base.Messages.ImageModel;
 import webcast.model.base.emoji.Emoji.EmoteModel;
 import webcast.model.base.user.User2.User;
@@ -24,9 +26,15 @@ public final class EventDecoder {
     }
 
     /**
-     * An absolute {@code http(s)} URL with no control characters or spaces, within the length
-     * bound. Every emote field is untrusted, so anything else is dropped while the emote is kept.
-     * Mirrors {@code normalize::sanitize_image_url} in Rust.
+     * An absolute {@code http(s)} URL with a real hostname, no credentials, no control
+     * characters or spaces, within the length bound. Every emote field is untrusted, so anything
+     * else is dropped while the emote is kept.
+     *
+     * <p>Validation uses OkHttp's {@link HttpUrl} (the same parser the SDK's HTTP stack uses)
+     * rather than a string prefix, so IPv6 literals, explicit ports and IDNA-decoded Unicode
+     * hostnames behave like the Rust {@code url} crate. A raw authority check stops
+     * {@code https:///no-host} from being repaired into {@code https://no-host/}. Mirrors
+     * {@code normalize::sanitize_image_url} in Rust.
      */
     private static String sanitizeImageUrl(String url) {
         if (url == null || url.getBytes(StandardCharsets.UTF_8).length > LiveEmote.MAX_EMOTE_URL_LENGTH)
@@ -35,11 +43,19 @@ public final class EventDecoder {
             char c = url.charAt(i);
             if (c == ' ' || c < 0x20 || (c >= 0x7f && c <= 0x9f)) return null;
         }
-        String rest;
-        if (url.startsWith("https://")) rest = url.substring("https://".length());
-        else if (url.startsWith("http://")) rest = url.substring("http://".length());
-        else return null;
-        return rest.isEmpty() || rest.startsWith("/") ? null : url;
+        // Require an explicit, non-empty authority: a lenient parser reads
+        // `https:///no-host` as `https://no-host/`, and `http:example.com` has no `//` at all.
+        int separator = url.indexOf("://");
+        if (separator < 0) return null;
+        String authority = url.substring(separator + 3);
+        if (authority.isEmpty() || authority.charAt(0) == '/') return null;
+        HttpUrl parsed = HttpUrl.parse(url);
+        if (parsed == null) return null;
+        if (!parsed.scheme().equals("http") && !parsed.scheme().equals("https")) return null;
+        // An image URL must never smuggle credentials, which could hide an unexpected host.
+        if (!parsed.username().isEmpty() || !parsed.password().isEmpty()) return null;
+        if (parsed.host().isEmpty()) return null;
+        return url;
     }
 
     /** First usable artwork URL, or {@code null} when the message carried none. */

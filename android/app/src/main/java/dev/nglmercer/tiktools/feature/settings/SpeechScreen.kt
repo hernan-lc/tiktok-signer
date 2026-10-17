@@ -83,8 +83,8 @@ fun SpeechControls(
     )
     SettingSwitch(
         tr(R.string.speech_emote_remove_known),
-        p.sanitizer.removeKnownEmotes,
-        { onSpeech(p.copy(sanitizer = p.sanitizer.copy(removeKnownEmotes = it))) },
+        p.sanitizer.removeConfirmedEmotes,
+        { onSpeech(p.copy(sanitizer = p.sanitizer.copy(removeConfirmedEmotes = it))) },
     )
     SettingSwitch(
         tr(R.string.speech_emote_skip_empty),

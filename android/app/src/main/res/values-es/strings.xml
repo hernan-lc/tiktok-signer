@@ -280,8 +280,8 @@
     <string name="speech_shares">Compartidos</string>
     <string name="speech_joins">Uniones</string>
     <string name="speech_emote_cleanup">Limpieza de emoticonos</string>
-    <string name="speech_emote_cleanup_hint">Los códigos de emoticono reconocidos se eliminan antes de hablar. El texto entre corchetes desconocido se deja tal cual.</string>
-    <string name="speech_emote_remove_known">Omitir emoticonos reconocidos</string>
+    <string name="speech_emote_cleanup_hint">Solo se eliminan antes de hablar los códigos de emoticono confirmados por el propio evento. El texto entre corchetes desconocido se deja tal cual.</string>
+    <string name="speech_emote_remove_known">Omitir emoticonos confirmados</string>
     <string name="speech_emote_skip_empty">Silencio si solo hay emoticonos</string>
     <string name="speech_emote_skip_empty_hint">Un comentario solo de emoticonos no dice nada, ni siquiera el nombre de quien lo envía.</string>
     <string name="speech_emote_collapse">Ordenar espacios</string>

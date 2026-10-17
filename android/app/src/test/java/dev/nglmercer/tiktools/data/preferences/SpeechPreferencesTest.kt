@@ -44,7 +44,7 @@ class SpeechPreferencesTest {
         assertFalse(speech.exportWav)
         assertEquals(SupertonicQuality.DEFAULT_MAX_CHARS, speech.maxSpeechChars)
         assertEquals(0, speech.maxSpeechChars)
-        assertTrue(speech.sanitizer.removeKnownEmotes)
+        assertTrue(speech.sanitizer.removeConfirmedEmotes)
         assertFalse(speech.sanitizer.removeUnicodeEmoji)
         assertTrue(speech.sanitizer.collapseWhitespace)
         assertTrue(speech.sanitizer.skipEmptyMessages)
@@ -78,7 +78,7 @@ class SpeechPreferencesTest {
                     booleanPreferencesKey("speech_diagnostic_logging") to true,
                     booleanPreferencesKey("speech_export_wav") to true,
                     intPreferencesKey("speech_max_chars") to 140,
-                    booleanPreferencesKey("speech_emote_remove_known") to false,
+                    booleanPreferencesKey("speech_emote_remove_confirmed") to false,
                     booleanPreferencesKey("speech_emote_remove_unicode") to true,
                     booleanPreferencesKey("speech_emote_collapse") to false,
                     booleanPreferencesKey("speech_emote_skip_empty") to false,
@@ -95,10 +95,35 @@ class SpeechPreferencesTest {
         assertTrue(speech.diagnosticLogging)
         assertTrue(speech.exportWav)
         assertEquals(140, speech.maxSpeechChars)
-        assertFalse(speech.sanitizer.removeKnownEmotes)
+        assertFalse(speech.sanitizer.removeConfirmedEmotes)
         assertTrue(speech.sanitizer.removeUnicodeEmoji)
         assertFalse(speech.sanitizer.collapseWhitespace)
         assertFalse(speech.sanitizer.skipEmptyMessages)
+    }
+
+    @Test
+    fun theLegacyEmoteCleanupKeyStillDecidesTheSetting() {
+        // An install that turned cleanup off before the rename keeps its choice.
+        assertFalse(
+            speech(
+                    mutablePreferencesOf(
+                        booleanPreferencesKey("speech_emote_remove_known") to false
+                    )
+                )
+                .sanitizer
+                .removeConfirmedEmotes
+        )
+        // The new key wins once it is present.
+        assertTrue(
+            speech(
+                    mutablePreferencesOf(
+                        booleanPreferencesKey("speech_emote_remove_known") to false,
+                        booleanPreferencesKey("speech_emote_remove_confirmed") to true,
+                    )
+                )
+                .sanitizer
+                .removeConfirmedEmotes
+        )
     }
 
     @Test

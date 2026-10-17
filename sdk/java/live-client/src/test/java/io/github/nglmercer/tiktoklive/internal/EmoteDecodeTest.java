@@ -63,6 +63,47 @@ class EmoteDecodeTest {
     }
 
     @Test
+    void urlValidationAcceptsRealHostsAndRejectsCredentialsAndObfuscation() {
+        for (String url :
+                List.of(
+                        "http://cdn.example:8080/img/x.webp",
+                        "https://[::1]:8443/img/x.webp",
+                        "https://xn--r8jz45g.xn--zckzah/x.webp",
+                        "https://例え.テスト/x.webp")) {
+            var message =
+                    WebcastChatMessage.newBuilder()
+                            .setContent("[x]")
+                            .addEmotes(
+                                    EmoteWithIndex.newBuilder()
+                                            .setIndex(0)
+                                            .setEmote(emote("7", url)))
+                            .build();
+            var event = assertInstanceOf(ChatEvent.class, decode("WebcastChatMessage", message));
+            assertEquals(url, event.emotes().get(0).imageUrl(), url);
+        }
+        for (String url :
+                List.of(
+                        "https://user@cdn.example/x.webp",
+                        "https://user:pass@cdn.example/x.webp",
+                        "http://cdn.example:99999/x.webp",
+                        "https:///no-host",
+                        "https://",
+                        "http:cdn.example/x.webp",
+                        "https://cdn.example/\u0007x.webp")) {
+            var message =
+                    WebcastChatMessage.newBuilder()
+                            .setContent("[x]")
+                            .addEmotes(
+                                    EmoteWithIndex.newBuilder()
+                                            .setIndex(0)
+                                            .setEmote(emote("7", url)))
+                            .build();
+            var event = assertInstanceOf(ChatEvent.class, decode("WebcastChatMessage", message));
+            assertNull(event.emotes().get(0).imageUrl(), url);
+        }
+    }
+
+    @Test
     void anEmoteTypeOfZeroIsOmitted() {
         var message =
                 WebcastChatMessage.newBuilder()

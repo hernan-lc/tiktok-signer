@@ -33,12 +33,19 @@ from an explicit zero, and a guessed default is worse than a missing key.
 
 * `id` — `EmoteModel.emote_id`, verbatim.
 * `shortcode` — only when reliably known. The v3 schema has **no field verified
-  to be the textual shortcode**, so this is `null` today. A numeric or opaque id
-  is never rewritten into `[<id>]`.
+  to be the textual shortcode**, so the Rust normalizer emits `null` today; a
+  producer that does carry a confirmed shortcode may set it. A numeric or opaque
+  id is never rewritten into `[<id>]`.
 * `imageUrl` — the first usable URL from `EmoteModel.image.url_list`. Only
   absolute `http(s)` URLs pass; unsafe schemes (`javascript:`, `data:`, `file:`),
-  control characters, spaces, a missing host, and values past
-  `MAX_EMOTE_URL_LENGTH` are dropped **without dropping the emote**.
+  control characters, spaces, embedded credentials, a missing host, an explicit
+  port above `65535`, and values past `MAX_EMOTE_URL_LENGTH` are dropped
+  **without dropping the emote**. A value must contain `://` with a real
+  authority, so `http:example.com` and `https:///no-host` are rejected rather
+  than repaired. IPv6 hosts with a port, explicit `http` ports and Unicode
+  (IDNA) hostnames are accepted. The raw pre-parse authority is checked in
+  every language before handing the string to the native parser, so no
+  implementation can silently normalise a malformed value into a valid one.
 * `index` — the raw `EmoteWithIndex.index`. Its unit is **not confirmed**
   (UTF-8 bytes, code points and UTF-16 units are all plausible), so it is
   preserved unmodified, text is never sliced with it, and the original comment is
@@ -87,15 +94,42 @@ than against themselves.
 before it reaches *any* speech engine (system `TextToSpeech` and Supertonic
 alike). The original event is never modified.
 
-* Only tokens present in the `EmoteCatalog` catalog — or confirmed by the
-  event's own metadata — are removed. `[1,2,3]` and `[test]` are preserved: a
-  blanket `\[[^]]+\]` deletion is explicitly rejected.
+* Only tokens confirmed by the event's own metadata (`emotes[].shortcode`) are
+  removed. The provisional `EmoteCatalog` is never treated as evidence, so
+  `[laughcry]` spoken in a message whose event did not carry that emote is kept.
+  `[1,2,3]` and `[test]` are preserved: a blanket `\[[^]]+\]` deletion is
+  explicitly rejected.
 * The cleanup runs **before** the empty-message check and before the sender's
-  name is prepended, so `[laughcry][laughcry]` says nothing rather than just the
-  sender's name.
+  name is prepended, so a comment that consists only of confirmed emotes says
+  nothing rather than just the sender's name.
 * Unicode emoji removal is opt-in and never strips zero-width joiners or
-  non-joiners.
+  non-joiners. Flag pairs, keycaps, skin-tone modifiers and ZWJ sequences are
+  removed as whole units; combining marks on ordinary letters survive.
+* The setting is `removeConfirmedEmotes` (key
+  `speech_emote_remove_confirmed`). Installs that stored the old
+  `speech_emote_remove_known` key keep their choice through a read fallback.
 
-The catalog is **provisional**: the shortcodes in `EmoteCatalog.known` have not
+`EmoteCatalog.provisional` is a list of **hypotheses**: the shortcodes have not
 been confirmed against captured LIVE traffic, and TikTok does not document them.
-They are candidates, not facts, and a live capture is what would confirm them.
+A name dropping out of that list must not change what is spoken, because the
+list is never used for deletion.
+
+## Android rendering
+
+`EventRow` draws the artwork carried by an event instead of only summarising it:
+
+* a standalone emote event shows a bounded strip of emote images (the count text
+  is dropped once real artwork exists);
+* a chat comment keeps its original text and shows a bounded strip of the
+  confirmed inline emotes underneath it.
+
+Only emotes with a valid `imageUrl` are drawn, at most 8 per row, with a
+placeholder while loading and an icon fallback for a broken URL. Coil caches by
+URL, so identical emotes across rows share one download and recomposition does
+not restart it. Nothing is fetched during decoding, and the text is never
+rewritten or spliced by emote index.
+
+Android mirrors the same URL rule with `java.net.URI` + `java.net.IDN` (rather
+than `android.net.Uri`, which is not usable in plain JVM tests); Java uses
+OkHttp's `HttpUrl` and Rust/TypeScript use `url`/`URL`. All four enforce the
+same length caps, scheme, credentials, authority and port checks.

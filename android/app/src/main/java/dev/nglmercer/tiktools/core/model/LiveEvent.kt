@@ -1,5 +1,7 @@
 package dev.nglmercer.tiktools.core.model
 
+import java.net.IDN
+import java.net.URI
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -178,22 +180,27 @@ object EventParser {
 
     /**
      * Parse the normalized `emotes` array. Tolerant by construction: a malformed entry is skipped,
-     * and an emote with neither an id nor artwork (nothing to show) is dropped, matching the Rust
-     * and TypeScript decoders.
+     * an emote with neither an id nor artwork (nothing to show) is dropped, and the list is capped,
+     * matching the Rust and TypeScript decoders. The count, id-length and URL rules are the same
+     * bounds the core enforces, so a hand-crafted or intermediate payload cannot bypass them.
      */
     private fun parseEmotes(array: JSONArray?): List<LiveEmote> {
         if (array == null || array.length() == 0) return emptyList()
-        val emotes = ArrayList<LiveEmote>(array.length())
+        val emotes = ArrayList<LiveEmote>(minOf(array.length(), MAX_EMOTES_PER_EVENT))
         for (index in 0 until array.length()) {
+            if (emotes.size >= MAX_EMOTES_PER_EVENT) break
             val entry = array.optJSONObject(index) ?: continue
             val id = entry.optString("id", "")
-            val imageUrl = entry.optString("imageUrl", "")
-            if (id.isEmpty() && imageUrl.isEmpty()) continue
+            // An over-long id is dropped rather than truncated into a colliding one.
+            if (id.toByteArray(Charsets.UTF_8).size > MAX_EMOTE_ID_LENGTH) continue
+            val rawImageUrl = entry.optString("imageUrl", "")
+            val imageUrl = rawImageUrl.takeIf { isSafeImageUrl(it) }
+            if (id.isEmpty() && imageUrl == null) continue
             emotes.add(
                 LiveEmote(
                     id = id,
                     shortcode = entry.optString("shortcode", "").ifEmpty { null },
-                    imageUrl = imageUrl.ifEmpty { null },
+                    imageUrl = imageUrl,
                     index = if (entry.has("index")) entry.optInt("index") else null,
                     emoteType = if (entry.has("emoteType")) entry.optInt("emoteType") else null,
                     packageId = entry.optString("packageId", "").ifEmpty { null },
@@ -202,4 +209,44 @@ object EventParser {
         }
         return emotes
     }
+
+    /**
+     * Whether an artwork URL is an absolute `http(s)` URL with a real host, no credentials and no
+     * control characters, within the byte bound. Mirrors the Rust `url`-crate rule and the
+     * TypeScript `URL` rule so a URL the core accepted (or a future one it rejects) is treated the
+     * same on device.
+     */
+    private fun isSafeImageUrl(url: String): Boolean {
+        if (url.isEmpty() || url.toByteArray(Charsets.UTF_8).size > MAX_EMOTE_URL_LENGTH) return false
+        for (character in url) {
+            val code = character.code
+            if (character == ' ' || code < 0x20 || code in 0x7f..0x9f) return false
+        }
+        val uri =
+            try {
+                URI(url)
+            } catch (_: Exception) {
+                return false
+            }
+        val scheme = uri.scheme?.lowercase() ?: return false
+        if (scheme != "http" && scheme != "https") return false
+        if (uri.userInfo != null) return false
+        val authority = uri.rawAuthority ?: return false
+        if (authority.isEmpty() || authority.startsWith('/')) return false
+        if (uri.port > 65535) return false
+        val host = uri.host
+        if (host != null) return host.isNotEmpty()
+        // A Unicode host: `URI` leaves `host` null, so confirm IDNA can encode it.
+        val plainHost = authority.substringBeforeLast(':').removeSurrounding("[", "]")
+        return runCatching { IDN.toASCII(plainHost) }.map { it.isNotEmpty() }.getOrDefault(false)
+    }
+
+    /** Upper bound on the emotes carried by one event; mirrors the core. */
+    const val MAX_EMOTES_PER_EVENT = 64
+
+    /** Upper bound on an emote identifier in UTF-8 bytes; mirrors the core. */
+    const val MAX_EMOTE_ID_LENGTH = 128
+
+    /** Upper bound on an emote artwork URL in UTF-8 bytes; mirrors the core. */
+    const val MAX_EMOTE_URL_LENGTH = 2048
 }
