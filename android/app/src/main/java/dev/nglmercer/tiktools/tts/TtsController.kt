@@ -54,8 +54,12 @@ object TtsController {
     }
 
     /**
-     * Repeat the last spoken line, stopping the current utterance first so a busy engine replays
-     * instead of dropping. Returns false when there is nothing to repeat or speech is off.
+     * Repeat the last spoken line.
+     *
+     * Safe while the engine is busy: the Supertonic speaker queues the request (replacing anything
+     * pending) and discards the superseded inference result, so a repeat issued mid-synthesis or
+     * mid-playback replays instead of being dropped. Returns false when there is nothing to repeat or
+     * speech is off.
      */
     fun repeatLast(): Boolean {
         val current = synchronized(lock) { speaker to engine }

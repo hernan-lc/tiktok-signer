@@ -8,6 +8,11 @@ import androidx.datastore.preferences.preferencesDataStore
 import dev.nglmercer.tiktools.core.model.*
 import dev.nglmercer.tiktools.data.rewards.PointsConfig
 import dev.nglmercer.tiktools.tts.TtsEngine
+import dev.nglmercer.tiktools.tts.supertonic.LanguageMode
+import dev.nglmercer.tiktools.tts.supertonic.QualityPreset
+import dev.nglmercer.tiktools.tts.supertonic.SupertonicLanguages
+import dev.nglmercer.tiktools.tts.supertonic.SupertonicModels
+import dev.nglmercer.tiktools.tts.supertonic.SupertonicQuality
 import java.io.IOException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.*
@@ -45,6 +50,17 @@ class PreferencesRepository(
             it[booleanPreferencesKey("joins")] = p.joins
             it[stringPreferencesKey("speech_chat_name_mode")] = p.chatNameMode.name
             it[stringPreferencesKey("speech_chat_prefix")] = p.chatPrefix
+            it[stringPreferencesKey("speech_language_mode")] = p.languageMode.name
+            it[stringPreferencesKey("speech_language")] = p.language
+            it[stringPreferencesKey("speech_voice")] = p.voice
+            it[stringPreferencesKey("speech_quality")] = p.qualityPreset.name
+            it[intPreferencesKey("speech_steps")] = p.customSteps ?: UNLIMITED
+            it[floatPreferencesKey("speech_speed")] = p.speed
+            it[intPreferencesKey("speech_chunk_length")] = p.chunkLength ?: UNLIMITED
+            it[intPreferencesKey("speech_chunk_silence_ms")] = p.chunkSilenceMs
+            it[booleanPreferencesKey("speech_diagnostic_logging")] = p.diagnosticLogging
+            it[booleanPreferencesKey("speech_export_wav")] = p.exportWav
+            it[intPreferencesKey("speech_max_chars")] = p.maxSpeechChars
         }
 
     suspend fun setRewards(p: PointsConfig) =
@@ -86,28 +102,69 @@ class PreferencesRepository(
         }
 
     companion object {
+        /** Sentinel for "no explicit value" in the integer-backed optional speech settings. */
+        internal const val UNLIMITED = -1
+
         internal fun decode(p: Preferences): UserPreferences {
             fun bool(name: String, fallback: Boolean) = p[booleanPreferencesKey(name)] ?: fallback
+            fun string(name: String) = p[stringPreferencesKey(name)]
             val engine =
-                p[stringPreferencesKey("engine")]?.let {
-                    runCatching { TtsEngine.valueOf(it) }.getOrNull()
-                } ?: if (bool("enabled", false)) TtsEngine.DEVICE else TtsEngine.OFF
+                string("engine")?.let { runCatching { TtsEngine.valueOf(it) }.getOrNull() }
+                    ?: if (bool("enabled", false)) TtsEngine.DEVICE else TtsEngine.OFF
             return UserPreferences(
                 engine = engine,
                 speech =
                     SpeechPreferences(
-                        bool("speech_chat", true),
-                        bool("speech_gifts", true),
-                        bool("speech_follows", true),
-                        bool("speech_shares", true),
-                        bool("joins", false),
-                        p[stringPreferencesKey("speech_chat_name_mode")]
-                            ?.let { runCatching { ChatNameMode.valueOf(it) }.getOrNull() }
-                            ?: ChatNameMode.ALWAYS,
-                        p[stringPreferencesKey("speech_chat_prefix")].orEmpty(),
+                        chat = bool("speech_chat", true),
+                        gifts = bool("speech_gifts", true),
+                        follows = bool("speech_follows", true),
+                        shares = bool("speech_shares", true),
+                        joins = bool("joins", false),
+                        chatNameMode =
+                            string("speech_chat_name_mode")?.let {
+                                runCatching { ChatNameMode.valueOf(it) }.getOrNull()
+                            } ?: ChatNameMode.ALWAYS,
+                        chatPrefix = string("speech_chat_prefix").orEmpty(),
+                        // Upgrades default to Auto/na: unknown-language input keeps working, and the
+                        // previous build never sent a language tag at all.
+                        languageMode =
+                            string("speech_language_mode")?.let {
+                                runCatching { LanguageMode.valueOf(it) }.getOrNull()
+                            } ?: LanguageMode.AUTO,
+                        language =
+                            string("speech_language")
+                                ?.takeIf { SupertonicLanguages.isValid(it) }
+                                ?: SupertonicLanguages.DEFAULT,
+                        voice =
+                            string("speech_voice")
+                                ?.takeIf { it in SupertonicModels.VOICES }
+                                ?: SupertonicModels.DEFAULT_VOICE,
+                        qualityPreset =
+                            string("speech_quality")?.let {
+                                runCatching { QualityPreset.valueOf(it) }.getOrNull()
+                            } ?: QualityPreset.DEFAULT,
+                        customSteps =
+                            p[intPreferencesKey("speech_steps")]
+                                ?.takeIf { it in SupertonicQuality.STEPS_RANGE },
+                        speed =
+                            p[floatPreferencesKey("speech_speed")]
+                                ?.takeIf { it in SupertonicQuality.MIN_SPEED..SupertonicQuality.MAX_SPEED }
+                                ?: SupertonicQuality.DEFAULT_SPEED,
+                        chunkLength =
+                            p[intPreferencesKey("speech_chunk_length")]
+                                ?.takeIf { it in SupertonicQuality.CHUNK_LENGTH_RANGE },
+                        chunkSilenceMs =
+                            p[intPreferencesKey("speech_chunk_silence_ms")]
+                                ?.takeIf { it >= 0 }
+                                ?: SupertonicQuality.DEFAULT_SILENCE_MS,
+                        diagnosticLogging = bool("speech_diagnostic_logging", false),
+                        exportWav = bool("speech_export_wav", false),
+                        maxSpeechChars =
+                            p[intPreferencesKey("speech_max_chars")]?.coerceAtLeast(0)
+                                ?: SupertonicQuality.DEFAULT_MAX_CHARS,
                     ),
                 rewards =
-                    p[stringPreferencesKey("config")]?.let {
+                    string("config")?.let {
                         runCatching { PointsConfig.decode(it).normalize() }.getOrNull()
                     } ?: PointsConfig(),
                 display =
@@ -124,19 +181,16 @@ class PreferencesRepository(
                                 runCatching { LiveEvent.Category.valueOf(it) }.getOrNull()
                             }
                             ?.toSet() ?: LiveEvent.Category.entries.toSet(),
-                        p[stringPreferencesKey("filter_query")].orEmpty(),
+                        string("filter_query").orEmpty(),
                     ),
                 reconnect = bool("reconnect", true),
                 backgroundConnection = bool("background", true),
                 theme =
-                    p[stringPreferencesKey("theme")]?.let {
+                    string("theme")?.let {
                         runCatching { ThemeMode.valueOf(it) }.getOrNull()
                     } ?: ThemeMode.SYSTEM,
                 recentCreators =
-                    p[stringPreferencesKey("recent_creators")]
-                        .orEmpty()
-                        .split(",")
-                        .filter(String::isNotBlank),
+                    string("recent_creators").orEmpty().split(",").filter(String::isNotBlank),
             )
         }
     }

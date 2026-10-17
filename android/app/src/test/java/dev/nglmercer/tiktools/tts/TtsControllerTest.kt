@@ -109,4 +109,84 @@ class TtsControllerTest {
         assertTrue(TtsController.controlsVisible(TtsEngine.DEVICE))
         assertTrue(TtsController.controlsVisible(TtsEngine.SUPERTONIC))
     }
+
+    /**
+     * Models the old Supertonic defect: a speaker that silently drops a request while it is already
+     * synthesizing or playing. Repeat must therefore always unblock the speaker with `stop()` first.
+     */
+    private class BusyAwareSpeaker : Speaker {
+        override val enabled: Boolean = true
+        val spoken = mutableListOf<String>()
+        val dropped = mutableListOf<String>()
+        var stops = 0
+        private var busy = false
+
+        override fun speak(text: String) {
+            if (busy) {
+                dropped.add(text)
+                return
+            }
+            spoken.add(text)
+            busy = true
+        }
+
+        override fun stop() {
+            stops++
+            busy = false
+        }
+
+        override fun shutdown() = Unit
+
+        fun finish() {
+            busy = false
+        }
+    }
+
+    @Test
+    fun repeatUnblocksABusySpeakerInsteadOfDroppingTheRequest() {
+        val busy = BusyAwareSpeaker()
+        TtsController.attach(busy, TtsEngine.SUPERTONIC)
+        TtsController.speak("first")
+        // Still synthesizing/playing the first line.
+        assertTrue(TtsController.repeatLast())
+        assertEquals(listOf("first", "first"), busy.spoken)
+        assertTrue("repeat must not be dropped", busy.dropped.isEmpty())
+        assertEquals(1, busy.stops)
+    }
+
+    @Test
+    fun repeatKeepsTheRememberedLineSoItCanBeRepeatedAgain() {
+        val busy = BusyAwareSpeaker()
+        TtsController.attach(busy, TtsEngine.SUPERTONIC)
+        TtsController.speak("hello")
+        assertTrue(TtsController.repeatLast())
+        busy.finish()
+        assertTrue(TtsController.repeatLast())
+        assertEquals(listOf("hello", "hello", "hello"), busy.spoken)
+        assertEquals("hello", TtsController.lastSpoken.value)
+    }
+
+    @Test
+    fun skipDuringPlaybackOnlyStopsAndKeepsTheRememberedLine() {
+        val busy = BusyAwareSpeaker()
+        TtsController.attach(busy, TtsEngine.SUPERTONIC)
+        TtsController.speak("hello")
+        TtsController.skip()
+        assertEquals(1, busy.stops)
+        assertEquals("hello", TtsController.lastSpoken.value)
+        assertTrue(TtsController.repeatLast())
+    }
+
+    @Test
+    fun aNewerRequestIsDeliveredOnceTheSpeakerIsUnblocked() {
+        val busy = BusyAwareSpeaker()
+        TtsController.attach(busy, TtsEngine.SUPERTONIC)
+        TtsController.speak("one")
+        // The interrupt itself lives in SupertonicSpeaker.speak(); a bare [Speaker] needs stop().
+        TtsController.skip()
+        TtsController.speak("two")
+        assertEquals(listOf("one", "two"), busy.spoken)
+        assertTrue(busy.dropped.isEmpty())
+        assertEquals("two", TtsController.lastSpoken.value)
+    }
 }

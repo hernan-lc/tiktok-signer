@@ -6,6 +6,7 @@ import dev.nglmercer.tiktools.core.diagnostics.Logger
 import dev.nglmercer.tiktools.core.model.LiveEvent
 import dev.nglmercer.tiktools.data.preferences.*
 import dev.nglmercer.tiktools.tts.supertonic.*
+import java.io.File
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
@@ -20,7 +21,11 @@ class TtsRepository(
         val progress: Float? = null,
         val detail: String = "",
         val downloading: Boolean = false,
+        val validating: Boolean = false,
         val error: String? = null,
+        val voices: List<String> = SupertonicModels.VOICES,
+        val downloadedVoices: List<String> = emptyList(),
+        val selectedVoice: String = SupertonicModels.DEFAULT_VOICE,
     )
 
     private val _models = MutableStateFlow(ModelState())
@@ -36,13 +41,54 @@ class TtsRepository(
     private val engineLock = kotlinx.coroutines.sync.Mutex()
 
     init {
-        refreshModels()
+        scope.launch(Dispatchers.IO) {
+            verifyExistingModel()
+            refreshModelsNow()
+        }
         scope.launch {
             preferences.values
                 .map { it.engine }
                 .distinctUntilChanged()
                 .collect { selected -> rebuild(selected) }
         }
+        scope.launch {
+            preferences.values
+                .map { SupertonicSettings.from(it.speech) }
+                .distinctUntilChanged()
+                .collect { applySettings(it) }
+        }
+    }
+
+    /**
+     * An installation that predates the manifest (or a partial download) has files but no proven
+     * digest set. Hash them once — if they match the pinned revision the model activates without the
+     * user re-downloading; if not, they are reported and the user is asked to download again.
+     */
+    private suspend fun verifyExistingModel() {
+        if (SupertonicModels.status(context) !is SupertonicModels.Status.Unverified) return
+        _models.value = _models.value.copy(validating = true)
+        val failures =
+            try {
+                SupertonicModels.verifyAll(context)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _models.value = _models.value.copy(validating = false, error = e.message)
+                return
+            }
+        _models.value =
+            _models.value.copy(
+                validating = false,
+                error =
+                    if (failures.isEmpty()) null
+                    else context.getString(R.string.speech_download_failed_detail, failures.joinToString()),
+            )
+    }
+
+    private fun applySettings(settings: SupertonicSettings) {
+        (speaker as? SupertonicSpeaker)?.configure(settings)
+        _models.value =
+            _models.value.copy(selectedVoice = settings.resolvedVoice)
     }
 
     private suspend fun rebuild(selected: TtsEngine) {
@@ -61,6 +107,7 @@ class TtsRepository(
                     TtsEngine.SUPERTONIC -> SupertonicSpeaker(context)
                 }
             (speaker as? SupertonicSpeaker)?.let { current ->
+                current.configure(SupertonicSettings.from(preferences.state.value.speech))
                 watcher = scope.launch { current.state.collect { _voice.value = it } }
             }
             TtsController.attach(speaker, selected)
@@ -137,35 +184,84 @@ class TtsRepository(
         TtsController.skip()
     }
 
+    /** Preview the default voice without touching repeat history. */
     fun testVoice() {
-        TtsController.speak(context.getString(R.string.speech_test_line))
+        previewVoice(context.getString(R.string.speech_test_line))
     }
 
-    fun refreshModels() {
+    /** Preview arbitrary text (and optionally a specific voice) without touching repeat history. */
+    fun previewVoice(text: String, voice: String? = null) {
+        val supertonic = speaker as? SupertonicSpeaker
+        if (supertonic != null) supertonic.preview(text, voice)
+        else TtsController.speak(text)
+    }
+
+    /** Load a voice style on demand so the user can preview or select it. */
+    fun downloadVoice(name: String) {
         scope.launch(Dispatchers.IO) {
-            val ready = SupertonicModels.status(context) is SupertonicModels.Status.Ready
-            val bytes =
-                SupertonicModels.dir(context)
-                    .listFiles()
-                    .orEmpty()
-                    .filter { !it.name.endsWith(".part") }
-                    .sumOf { it.length() }
-            _models.value =
-                _models.value.copy(
-                    ready = ready,
-                    bytes = bytes,
-                    detail =
-                        context.getString(
-                            if (ready) R.string.speech_model_ready
-                            else R.string.speech_model_download_hint
-                        ),
-                )
+            try {
+                (speaker as? SupertonicSpeaker)?.let { current ->
+                    current.configure(SupertonicSettings.from(preferences.state.value.speech))
+                    current.prepareVoice(name)
+                } ?: SupertonicModels.downloadVoice(context, name)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _models.value = _models.value.copy(error = e.message)
+            } finally {
+                refreshModels()
+            }
         }
+    }
+
+    suspend fun deleteVoice(name: String) {
+        check(download?.isActive != true) { context.getString(R.string.speech_delete_error) }
+        check(SupertonicModels.deleteVoice(context, name)) {
+            context.getString(R.string.speech_delete_files_error)
+        }
+        refreshModels()
+    }
+
+    /** Force the engine to be rebuilt and re-loaded; survives voice/language changes. */
+    fun reloadModel() {
+        (speaker as? SupertonicSpeaker)?.reload()
+    }
+
+    fun diagnosticsDir(): File = File(context.cacheDir, SupertonicDiagnostics.DIAG_DIR)
+
+    fun refreshModels() {
+        scope.launch(Dispatchers.IO) { refreshModelsNow() }
+    }
+
+    private suspend fun refreshModelsNow() {
+        val status = SupertonicModels.status(context)
+        val ready = status is SupertonicModels.Status.Ready
+        val bytes =
+            SupertonicModels.dir(context)
+                .listFiles()
+                .orEmpty()
+                .filter { !it.name.endsWith(".part") }
+                .sumOf { it.length() }
+        _models.value =
+            _models.value.copy(
+                ready = ready,
+                bytes = bytes,
+                downloadedVoices = SupertonicModels.downloadedVoices(context),
+                detail =
+                    context.getString(
+                        when (status) {
+                            is SupertonicModels.Status.Ready -> R.string.speech_model_ready
+                            is SupertonicModels.Status.Unverified -> R.string.speech_model_unverified
+                            is SupertonicModels.Status.Missing -> R.string.speech_model_download_hint
+                        }
+                    ),
+            )
     }
 
     fun downloadModels() {
         if (download?.isActive == true) return
-        _models.value = _models.value.copy(downloading = true, error = null, progress = 0f)
+        _models.value =
+            _models.value.copy(downloading = true, validating = false, error = null, progress = 0f)
         download =
             scope.launch {
                 try {
@@ -176,16 +272,29 @@ class TtsRepository(
                                 detail = "${p.fileName} · ${p.fileIndex+1}/${p.fileCount}",
                             )
                     }
+                    // Loading the engine here surfaces the Loading phase and validates the install.
+                    (speaker as? SupertonicSpeaker)?.let {
+                        it.configure(SupertonicSettings.from(preferences.state.value.speech))
+                        it.warmup()
+                    }
                 } catch (e: CancellationException) {
                     _models.value =
-                        _models.value.copy(detail = context.getString(R.string.speech_download_canceled))
+                        _models.value.copy(
+                            detail = context.getString(R.string.speech_download_canceled)
+                        )
                     throw e
                 } catch (e: Exception) {
-                    _models.value = _models.value.copy(
-                        error = e.message ?: context.getString(R.string.speech_download_failed)
-                    )
+                    _models.value =
+                        _models.value.copy(
+                            error = e.message ?: context.getString(R.string.speech_download_failed)
+                        )
                 } finally {
-                    _models.value = _models.value.copy(downloading = false, progress = null)
+                    _models.value =
+                        _models.value.copy(
+                            downloading = false,
+                            validating = false,
+                            progress = null,
+                        )
                     refreshModels()
                 }
             }
@@ -200,10 +309,7 @@ class TtsRepository(
         preferences.setEngine(TtsEngine.OFF)
         rebuild(TtsEngine.OFF)
         withContext(Dispatchers.IO) {
-            check(
-                !SupertonicModels.dir(context).exists() ||
-                    SupertonicModels.dir(context).deleteRecursively()
-            ) {
+            check(SupertonicModels.deleteAll(context)) {
                 context.getString(R.string.speech_delete_files_error)
             }
         }

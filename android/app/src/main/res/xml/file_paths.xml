@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Diagnostic WAV export only; nothing else is shared from cache. -->
+<paths>
+    <cache-path name="supertonic_diag" path="supertonic-diag/" />
+</paths>

@@ -28,6 +28,17 @@
             android:name="dev.nglmercer.tiktools.live.LiveService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
+
+        <!-- Shares the opt-in Supertonic diagnostic WAVs from the app cache. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 
 </manifest>

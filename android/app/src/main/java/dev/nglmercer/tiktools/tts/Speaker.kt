@@ -10,6 +10,9 @@ import java.util.Locale
  * What the reader speaks for one event. Pure: chat reads the comment, gifts and follows announce
  * themselves, noisy categories (likes, room stats) stay silent by default. Empty string means "say
  * nothing".
+ *
+ * Text is **not** truncated here: long messages are chunked sentence-aware by the Supertonic engine
+ * and bounded by the explicit `maxSpeechChars` LIVE policy, so words are never silently cut.
  */
 object SpeechText {
     fun forEvent(
@@ -23,8 +26,8 @@ object SpeechText {
         return when (event.category) {
             LiveEvent.Category.CHAT ->
                 if (event.text.isBlank()) ""
-                else if (!includeChatName) event.text.take(200)
-                else "$who ${chatPrefix.trim().ifEmpty { phrases.chatPrefix }}: ${event.text.take(200)}"
+                else if (!includeChatName) event.text
+                else "$who ${chatPrefix.trim().ifEmpty { phrases.chatPrefix }}: ${event.text}"
             LiveEvent.Category.GIFT -> "$who ${phrases.sent} ${event.text.ifEmpty { phrases.gift }}"
             LiveEvent.Category.FOLLOW -> "$who ${phrases.followed}"
             LiveEvent.Category.SHARE -> "$who ${phrases.shared}"
