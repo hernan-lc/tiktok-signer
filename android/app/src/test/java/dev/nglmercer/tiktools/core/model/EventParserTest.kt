@@ -1,5 +1,6 @@
 package dev.nglmercer.tiktools.core.model
 
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -181,6 +182,60 @@ class EventParserTest {
             event.emotes.size,
         )
         assertEquals("ok", event.emotes.single().id)
+    }
+
+    @Test
+    fun emoteCountIsCappedLikeTheCore() {
+        val emotes = (0 until EventParser.MAX_EMOTES_PER_EVENT + 5).joinToString(",") { """{"id":"$it"}""" }
+        val event =
+            EventParser.parse(
+                """{"type":"emote_chat","user":{"unique_id":"ay"},"emotes":[$emotes]}"""
+            )
+        assertEquals(EventParser.MAX_EMOTES_PER_EVENT, event.emotes.size)
+    }
+
+    @Test
+    fun overLongEmoteIdIsDroppedAndInvalidUrlOnlyDropsArtwork() {
+        val longId = "a".repeat(EventParser.MAX_EMOTE_ID_LENGTH + 1)
+        val event =
+            EventParser.parse(
+                """{"type":"chat","comment":"x","user":{"unique_id":"ay"},
+                   "emotes":[{"id":"$longId"},{"id":"ok","imageUrl":"javascript:alert(1)"},
+                   {"id":"good","imageUrl":"https://cdn.example/x.webp"}]}"""
+                    .replace("\n", "")
+            )
+        assertEquals(2, event.emotes.size)
+        assertEquals("ok", event.emotes[0].id)
+        assertEquals(null, event.emotes[0].imageUrl)
+        assertEquals("good", event.emotes[1].id)
+    }
+
+    @Test
+    fun imageUrlRuleMatchesTheCoreParser() {
+        val accepted =
+            listOf(
+                "http://cdn.example:8080/img/x.webp",
+                "https://[::1]:8443/img/x.webp",
+                "https://xn--r8jz45g.xn--zckzah/x.webp",
+                "https://例え.テスト/x.webp",
+            )
+        val rejected =
+            listOf(
+                "https://user@cdn.example/x.webp",
+                "https://user:pass@cdn.example/x.webp",
+                "http://cdn.example:99999/x.webp",
+                "https:///no-host",
+                "https://",
+                "http:cdn.example/x.webp",
+                "https://cdn.example/\u0007x.webp",
+            )
+        for (url in accepted + rejected) {
+            val event =
+                EventParser.parse(
+                    """{"type":"chat","comment":"x","user":{"unique_id":"ay"},"emotes":[{"id":"1","imageUrl":${JSONObject.quote(url)}}]}"""
+                )
+            assertEquals(url, url in accepted, event.emotes.single().imageUrl == url)
+        }
     }
 
     @Test

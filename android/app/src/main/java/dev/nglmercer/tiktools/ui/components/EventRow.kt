@@ -106,13 +106,25 @@ fun EventRow(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Text(
-                event.summary(),
-                maxLines = if (display.singleLine) 1 else 4,
-                overflow = TextOverflow.Ellipsis,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodyMedium,
-            )
+            // Emote artwork is always drawn from the event's own metadata. Inline emotes keep the
+            // original comment above them; a standalone emote event has no comment to show, so its
+            // count falls away once real artwork is available.
+            val hasArtwork = event.emotes.any { !it.imageUrl.isNullOrBlank() }
+            if (event.category == LiveEvent.Category.EMOTE && hasArtwork) {
+                EmoteStrip(event.emotes)
+            } else {
+                Text(
+                    event.summary(),
+                    maxLines = if (display.singleLine) 1 else 4,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                if (hasArtwork) {
+                    Spacer(Modifier.height(4.dp))
+                    EmoteStrip(event.emotes)
+                }
+            }
         }
         if (event.giftImageUrl.isNotEmpty())
             AsyncImage(event.giftImageUrl, null, Modifier.size(32.dp))

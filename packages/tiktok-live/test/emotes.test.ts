@@ -105,6 +105,32 @@ test('unsafe image URLs are rejected while the emote survives', () => {
   }
 });
 
+test('URL validation accepts real hosts and rejects credentials and obfuscation', () => {
+  const accepted = [
+    'http://cdn.example:8080/img/x.webp',
+    'https://[::1]:8443/img/x.webp',
+    'https://xn--r8jz45g.xn--zckzah/x.webp',
+    'https://例え.テスト/x.webp',
+  ];
+  for (const url of accepted) {
+    assert.equal(normalizeEmote(emote('7', url), 0)?.imageUrl, url, url);
+  }
+  const rejected = [
+    'https://user@cdn.example/x.webp',
+    'https://user:pass@cdn.example/x.webp',
+    'http://cdn.example:99999/x.webp',
+    'https:///no-host',
+    'https://',
+    'http:cdn.example/x.webp',
+    'https://cdn.example/\u0007x.webp',
+  ];
+  for (const url of rejected) {
+    const normalized = normalizeEmote(emote('7', url), 0);
+    assert.ok(normalized, url);
+    assert.equal(normalized.imageUrl, undefined, url);
+  }
+});
+
 test('an emote with neither id nor image is dropped', () => {
   assert.equal(normalizeEmote(emote('', ''), 0), undefined);
   assert.equal(normalizeEmote(undefined, 0), undefined);

@@ -68,7 +68,22 @@ export const MAX_EMOTES_PER_EVENT = 64;
 export const MAX_EMOTE_ID_LENGTH = 128;
 export const MAX_EMOTE_URL_LENGTH = 2048;
 
-const utf8Length = (value: string): number => new TextEncoder().encode(value).length;
+/// UTF-8 byte length without allocating an intermediate array. Surrogate pairs
+/// count as the four bytes Rust would see, so both sides bound the same wire
+/// data; this runs on every emote id and URL, so it must not allocate.
+function utf8Length(value: string): number {
+  let bytes = 0;
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff && index + 1 < value.length) {
+      bytes += 4;
+      index++;
+    } else bytes += 3;
+  }
+  return bytes;
+}
 
 // --- generated message adapters ----------------------------------------------------------------
 
@@ -119,8 +134,14 @@ export function decodeUser(payload?: Uint8Array): EventUser {
 }
 
 /**
- * An absolute `http(s)` URL, with no control characters or spaces and within the length bound.
- * Every emote field is untrusted, so anything else is dropped while the emote itself is kept.
+ * An absolute `http(s)` URL with a real hostname, no credentials, no control
+ * characters or spaces, and within the length bound. Every emote field is
+ * untrusted, so anything else is dropped while the emote itself is kept.
+ *
+ * Validation uses the platform URL parser so IPv6 literals
+ * (`http://[::1]:8080/x`), explicit ports, and Unicode hostnames (decoded via
+ * IDNA) are handled the same way as Rust's `url` crate. The raw authority check
+ * keeps `https:///no-host` from being quietly repaired into `https://no-host/`.
  * Mirrors `normalize::sanitize_image_url` in Rust.
  */
 function sanitizeImageUrl(url: string): string | undefined {
@@ -130,12 +151,19 @@ function sanitizeImageUrl(url: string): string | undefined {
     const control = code < 0x20 || (code >= 0x7f && code <= 0x9f);
     if (control || character === ' ') return undefined;
   }
-  const rest = url.startsWith('https://')
-    ? url.slice('https://'.length)
-    : url.startsWith('http://')
-      ? url.slice('http://'.length)
-      : undefined;
-  if (rest === undefined || rest.length === 0 || rest.startsWith('/')) return undefined;
+  const separator = url.indexOf('://');
+  if (separator === -1) return undefined;
+  const authority = url.slice(separator + '://'.length);
+  if (authority.length === 0 || authority.startsWith('/')) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return undefined;
+  if (parsed.username.length > 0 || parsed.password.length > 0) return undefined;
+  if (parsed.hostname.length === 0) return undefined;
   return url;
 }
 
@@ -149,10 +177,15 @@ function sanitizeImageUrl(url: string): string | undefined {
 export function normalizeEmote(emote: EmoteModel | undefined, index?: number): LiveEmote | undefined {
   if (!emote) return undefined;
   if (utf8Length(emote.emoteId) > MAX_EMOTE_ID_LENGTH) return undefined;
-  const emoteType = Number(emote.emoteType);
-  const imageUrl = emote.image?.urlList.map(sanitizeImageUrl).find((url) => url !== undefined);
+  // Find the first usable artwork URL without building an intermediate array.
+  let imageUrl: string | undefined;
+  for (const candidate of emote.image?.urlList ?? []) {
+    imageUrl = sanitizeImageUrl(candidate);
+    if (imageUrl !== undefined) break;
+  }
   if (emote.emoteId.length === 0 && imageUrl === undefined) return undefined;
 
+  const emoteType = Number(emote.emoteType);
   const normalized: LiveEmote = { id: emote.emoteId };
   if (imageUrl !== undefined) normalized.imageUrl = imageUrl;
   if (index !== undefined) normalized.index = index;
@@ -161,19 +194,31 @@ export function normalizeEmote(emote: EmoteModel | undefined, index?: number): L
   return normalized;
 }
 
-/// Shared collector: drop unusable emotes, keep wire order, and bound the count.
-function collectEmotes(normalized: Array<LiveEmote | undefined>): LiveEmote[] {
-  return normalized.filter((emote) => emote !== undefined).slice(0, MAX_EMOTES_PER_EVENT);
+/**
+ * Shared collector: normalise in wire order, drop unusable emotes, and stop as
+ * soon as `MAX_EMOTES_PER_EVENT` usable ones have been collected. Bounded
+ * iteration (rather than `map().filter().slice()`) means a hostile payload never
+ * materialises one intermediate array per emote, and the source is abandoned
+ * once the cap is reached.
+ */
+function collectEmotes<T>(source: readonly T[], normalize: (item: T) => LiveEmote | undefined): LiveEmote[] {
+  const collected: LiveEmote[] = [];
+  for (const item of source) {
+    if (collected.length >= MAX_EMOTES_PER_EVENT) break;
+    const normalized = normalize(item);
+    if (normalized !== undefined) collected.push(normalized);
+  }
+  return collected;
 }
 
 /// Inline `WebcastChatMessage.emotes` (each with its raw index).
 export function normalizeInlineEmotes(emotes: readonly EmoteWithIndex[]): LiveEmote[] {
-  return collectEmotes(emotes.map((inline) => normalizeEmote(inline.emote, inline.index)));
+  return collectEmotes(emotes, (inline) => normalizeEmote(inline.emote, inline.index));
 }
 
 /// Standalone `WebcastEmoteChatMessage.emote_list` (no index on the wire).
 export function normalizeStandaloneEmotes(emotes: readonly EmoteModel[]): LiveEmote[] {
-  return collectEmotes(emotes.map((emote) => normalizeEmote(emote, undefined)));
+  return collectEmotes(emotes, (emote) => normalizeEmote(emote, undefined));
 }
 
 /// Best available label for a user, preferring the stable handle.

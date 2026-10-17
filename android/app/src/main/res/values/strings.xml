@@ -298,8 +298,8 @@
     <string name="speech_shares">Shares</string>
     <string name="speech_joins">Joins</string>
     <string name="speech_emote_cleanup">Emote cleanup</string>
-    <string name="speech_emote_cleanup_hint">Recognized emote shortcodes are removed before speech. Unknown bracketed text is left as written.</string>
-    <string name="speech_emote_remove_known">Skip recognized emotes</string>
+    <string name="speech_emote_cleanup_hint">Only emote shortcodes confirmed by the event are removed before speech. Unknown bracketed text is left as written.</string>
+    <string name="speech_emote_remove_known">Skip confirmed emotes</string>
     <string name="speech_emote_skip_empty">Stay silent for emotes only</string>
     <string name="speech_emote_skip_empty_hint">A comment made only of emotes says nothing, not just the sender\'s name.</string>
     <string name="speech_emote_collapse">Tidy spacing</string>

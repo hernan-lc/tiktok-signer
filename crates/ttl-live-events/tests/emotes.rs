@@ -201,6 +201,52 @@ fn an_http_url_is_accepted_and_a_second_valid_url_is_used() {
 }
 
 #[test]
+fn url_validation_accepts_real_hosts_and_rejects_obfuscation() {
+    // An accepted URL keeps the emote's artwork; a rejected one drops only the
+    // URL. The emote id is irrelevant to the rule under test.
+    let keep = |url: &str| {
+        let payload = chat(
+            "[x]",
+            vec![EmoteWithIndex {
+                index: 0,
+                emote: Some(emote("7", url)),
+            }],
+        );
+        let LiveEvent::Chat(chat) = decode_event(method::CHAT, &payload) else {
+            panic!("expected chat")
+        };
+        chat.emotes[0].image_url.is_some()
+    };
+
+    for url in [
+        "http://cdn.example:8080/img/x.webp",
+        "https://[::1]:8443/img/x.webp",
+        "https://xn--r8jz45g.xn--zckzah/x.webp",
+        // Unicode hostnames are decoded through IDNA by the parser.
+        "https://例え.テスト/x.webp",
+    ] {
+        assert!(keep(url), "{url} should be accepted");
+    }
+
+    for url in [
+        // Credentials must never be smuggled through an image URL.
+        "https://user@cdn.example/x.webp",
+        "https://user:pass@cdn.example/x.webp",
+        // An out-of-range port is not a usable authority.
+        "http://cdn.example:99999/x.webp",
+        // An empty authority is never repaired into a host.
+        "https:///no-host",
+        "https://",
+        // Scheme-only ("http:example.com") is not the absolute `://` form.
+        "http:cdn.example/x.webp",
+        // Embedded control characters are rejected before parsing.
+        "https://cdn.example/\u{0007}x.webp",
+    ] {
+        assert!(!keep(url), "{url} should be rejected");
+    }
+}
+
+#[test]
 fn an_emote_with_neither_id_nor_image_is_dropped() {
     let payload = fixture("chat-invalid-emote.pb");
     let LiveEvent::Chat(chat) = decode_event(method::CHAT, &payload) else {

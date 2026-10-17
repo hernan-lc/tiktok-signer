@@ -4,21 +4,28 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.*
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import dev.nglmercer.tiktools.R
+import dev.nglmercer.tiktools.core.model.LiveEmote
 import dev.nglmercer.tiktools.core.model.LiveEvent
 import dev.nglmercer.tiktools.live.LiveSessionState
 import dev.nglmercer.tiktools.live.*
@@ -129,6 +136,64 @@ fun CreatorAvatar(url: String, name: String, size: androidx.compose.ui.unit.Dp =
                 name.take(1).uppercase().ifEmpty { "?" },
                 color = MaterialTheme.colorScheme.onSecondaryContainer,
             )
+    }
+}
+
+/**
+ * One emote thumbnail.
+ *
+ * Loading is async and cached by Coil keyed on the URL, so the same emote across many rows is
+ * downloaded once and never re-fetched on recomposition. A placeholder is shown while the image
+ * loads and an error/fallback icon replaces a broken URL, so a dead CDN link never blanks the row.
+ * The `remember`ed request keeps recomposition from rebuilding the request object.
+ */
+@Composable
+fun EmoteImage(url: String, contentDescription: String?, size: Dp = 28.dp) {
+    val context = LocalContext.current
+    val request = remember(url) {
+        ImageRequest.Builder(context).data(url).crossfade(true).build()
+    }
+    val placeholder = rememberVectorPainter(Icons.Outlined.EmojiEmotions)
+    Box(
+        Modifier.size(size)
+            .clip(RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center,
+    ) {
+        AsyncImage(
+            model = request,
+            contentDescription = contentDescription,
+            placeholder = placeholder,
+            error = placeholder,
+            fallback = placeholder,
+            modifier = Modifier.fillMaxSize().padding(2.dp),
+            contentScale = ContentScale.Fit,
+        )
+    }
+}
+
+/**
+ * A bounded row of emote artwork for a chat comment or a standalone emote event.
+ *
+ * Only emotes that actually carry artwork are drawn; the rest are represented by the surrounding
+ * text/count. The list is capped so a hostile or exceptionally long message cannot inflate the
+ * composition, and every item has a stable URL key so scrolling and recomposition reuse the cache.
+ */
+@Composable
+fun EmoteStrip(emotes: List<LiveEmote>, size: Dp = 28.dp, max: Int = 8) {
+    val shown = ArrayList<LiveEmote>(minOf(emotes.size, max))
+    for (emote in emotes) {
+        if (shown.size >= max) break
+        if (!emote.imageUrl.isNullOrBlank()) shown.add(emote)
+    }
+    if (shown.isEmpty()) return
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        for (emote in shown) {
+            EmoteImage(emote.imageUrl!!, emote.shortcode ?: emote.id, size)
+        }
     }
 }
 

@@ -76,15 +76,38 @@ class SpeechTextTest {
     }
 
     @Test
-    fun recognizedEmotesAreRemovedBeforeTheNameIsPrepended() {
-        val chat = LiveEvent(LiveEvent.Category.CHAT, "ay", "Ay", "Hello [laughcry]", 0, 0)
+    fun onlyConfirmedEmoteShortcodesAreRemovedBeforeTheNameIsPrepended() {
+        val chat =
+            LiveEvent(
+                LiveEvent.Category.CHAT,
+                "ay",
+                "Ay",
+                "Hello [laughcry]",
+                0,
+                0,
+                emotes = listOf(LiveEmote(id = "1", shortcode = "laughcry")),
+            )
         assertEquals("Ay says: Hello", SpeechText.forEvent(chat))
-        assertEquals("Hola amigo", SpeechText.forEvent(chat.copy(text = "Hola [happy] amigo"), includeChatName = false))
+        // An unconfirmed token is text, not an emote, and is spoken as written.
+        val unconfirmed = chat.copy(text = "Hola [happy] amigo", emotes = emptyList())
+        assertEquals(
+            "Hola [happy] amigo",
+            SpeechText.forEvent(unconfirmed, includeChatName = false),
+        )
     }
 
     @Test
     fun anEmoteOnlyCommentStaysSilentInsteadOfSayingJustTheName() {
-        val only = LiveEvent(LiveEvent.Category.CHAT, "ay", "Ay", "[laughcry][laughcry]", 0, 0)
+        val only =
+            LiveEvent(
+                LiveEvent.Category.CHAT,
+                "ay",
+                "Ay",
+                "[laughcry][laughcry]",
+                0,
+                0,
+                emotes = listOf(LiveEmote(id = "1", shortcode = "laughcry")),
+            )
         assertEquals("", SpeechText.forEvent(only))
         // With the guard off the sender's name is still all there is to say.
         assertEquals(
@@ -104,7 +127,8 @@ class SpeechTextTest {
         assertEquals("Ay says: Hello 😂", SpeechText.forEvent(
             LiveEvent(LiveEvent.Category.CHAT, "ay", "Ay", "Hello 😂", 0, 0),
         ))
-        assertEquals("Ay says: こんにちは", SpeechText.forEvent(
+        // Without confirmed metadata the token survives; the surrounding text does too.
+        assertEquals("Ay says: こんにちは [laughcry]", SpeechText.forEvent(
             LiveEvent(LiveEvent.Category.CHAT, "ay", "Ay", "こんにちは [laughcry]", 0, 0),
         ))
     }

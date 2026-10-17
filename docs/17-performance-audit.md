@@ -526,18 +526,21 @@ iterations), instrumented allocator:
 
 | Workload | Events/sec | ns/event | Alloc calls/event | Requested bytes/event |
 | --- | ---: | ---: | ---: | ---: |
-| Plain text chat (`decode_event`) | 413,398 | 2,419 | 16.00 | 833 |
-| Inline chat with 3 emotes (`decode_event`) | 128,452 | 7,785 | 78.00 | 78,312 |
-| Standalone emote message, 2 emotes (`decode_event`) | 246,262 | 4,061 | 44.00 | 34,086 |
-| Mixed batch, `DecodeMode::Normalized` | 202,928 | 4,928 | 21.66 | 35,792 |
-| Mixed batch, legacy `decode_batch` | 134,336 | 7,444 | 48.98 | 38,480 |
+| Plain text chat (`decode_event`) | 399,821 | 2,501 | 16.00 | 833 |
+| Inline chat with 3 emotes (`decode_event`) | 100,197 | 9,980 | 72.00 | 78,131 |
+| Standalone emote message, 2 emotes (`decode_event`) | 181,903 | 5,497 | 42.00 | 33,854 |
+| Mixed batch, `DecodeMode::Normalized` | 166,795 | 5,995 | 19.00 | 35,655 |
+| Mixed batch, legacy `decode_batch` | 117,641 | 8,500 | 46.32 | 38,342 |
 
 Two caveats keep these from being an emote-regression claim. `decode_event`
 always materializes the descriptor schema tree, so the per-event figures are
 dominated by that shared cost, not by `LiveEmote`; the production normalized path
 (`decode_batch_with_mode`) does not build a schema tree for a message it
-normalized. And these are single-run shared-host samples — they show the mixed
-pipeline sustains roughly 200k events/sec, orders of magnitude above any observed
-TikTok push rate, while emote extraction adds one small `LiveEmote` per emote
-(id, package id, validated URL). No before/after percentage is claimed; a
-comparison against a prior binary was not run for this change.
+normalized. Emote collection is bounded at `MAX_EMOTES_PER_EVENT`, pre-sizes its
+vector, and consumes the decoded message fields instead of cloning them, so the
+marginal cost is one small `LiveEmote` per emote (id, package id, validated URL)
+and nothing beyond the 64th. And these are single-run shared-host samples; they
+show the mixed pipeline sustains roughly 160k events/sec, orders of magnitude
+above any observed TikTok push rate. No before/after speedup percentage is
+claimed; the earlier table was a different host sample and is not an A/B binary
+comparison.

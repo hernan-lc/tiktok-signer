@@ -62,7 +62,7 @@ class PreferencesRepository(
             it[booleanPreferencesKey("speech_diagnostic_logging")] = p.diagnosticLogging
             it[booleanPreferencesKey("speech_export_wav")] = p.exportWav
             it[intPreferencesKey("speech_max_chars")] = p.maxSpeechChars
-            it[booleanPreferencesKey("speech_emote_remove_known")] = p.sanitizer.removeKnownEmotes
+            it[booleanPreferencesKey("speech_emote_remove_confirmed")] = p.sanitizer.removeConfirmedEmotes
             it[booleanPreferencesKey("speech_emote_remove_unicode")] = p.sanitizer.removeUnicodeEmoji
             it[booleanPreferencesKey("speech_emote_collapse")] = p.sanitizer.collapseWhitespace
             it[booleanPreferencesKey("speech_emote_skip_empty")] = p.sanitizer.skipEmptyMessages
@@ -167,11 +167,15 @@ class PreferencesRepository(
                         maxSpeechChars =
                             p[intPreferencesKey("speech_max_chars")]?.coerceAtLeast(0)
                                 ?: SupertonicQuality.DEFAULT_MAX_CHARS,
-                        // Emote cleanup is on by default for existing installs: a shortcode token
-                        // spoken aloud is noise, and unknown bracketed text is preserved anyway.
+                        // Emote cleanup is on by default, but it only removes shortcodes the
+                        // event itself confirms. Unknown bracketed text (and the provisional
+                        // catalog) is preserved. The old `speech_emote_remove_known` key is read
+                        // as a fallback so an existing install keeps its choice.
                         sanitizer =
                             SanitizerSettings(
-                                removeKnownEmotes = bool("speech_emote_remove_known", true),
+                                removeConfirmedEmotes =
+                                    p[booleanPreferencesKey("speech_emote_remove_confirmed")]
+                                        ?: bool("speech_emote_remove_known", true),
                                 removeUnicodeEmoji = bool("speech_emote_remove_unicode", false),
                                 collapseWhitespace = bool("speech_emote_collapse", true),
                                 skipEmptyMessages = bool("speech_emote_skip_empty", true),
