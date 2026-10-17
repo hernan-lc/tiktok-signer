@@ -357,3 +357,27 @@ fn signed_enum_and_normalized_views_preserve_types_and_values() {
         ttl_event_free(e);
     }
 }
+
+/// Emote metadata must survive the native JSON boundary: the native layer does
+/// not decode emotes itself, it forwards the shared Rust normalization.
+#[test]
+fn native_json_preserves_emote_metadata() {
+    unsafe {
+        let e = decode("WebcastChatMessage", &fixture("chat-inline-emote.pb"));
+        assert_eq!(ttl_event_normalized_type(e), 1);
+        let json = string(ttl_event_to_json(e, 0));
+        assert!(json.contains("\"emotes\""), "{json}");
+        assert!(json.contains("\"7098\""), "{json}");
+        assert!(json.contains("\"imageUrl\""), "{json}");
+        // The original text is never rewritten by emote extraction.
+        assert!(json.contains("Hello [laughcry]"), "{json}");
+        ttl_event_free(e);
+
+        let e = decode("WebcastEmoteChatMessage", &fixture("emote-chat.pb"));
+        assert_eq!(ttl_event_normalized_type(e), 7);
+        let json = string(ttl_event_to_json(e, 0));
+        assert!(json.contains("\"emote_chat\""), "{json}");
+        assert!(json.contains("\"7099\""), "{json}");
+        ttl_event_free(e);
+    }
+}

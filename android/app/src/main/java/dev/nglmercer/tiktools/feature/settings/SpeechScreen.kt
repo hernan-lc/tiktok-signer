@@ -75,6 +75,34 @@ fun SpeechControls(
     SettingSwitch(tr(R.string.speech_follows), p.follows, { onSpeech(p.copy(follows = it)) })
     SettingSwitch(tr(R.string.speech_shares), p.shares, { onSpeech(p.copy(shares = it)) })
     SettingSwitch(tr(R.string.speech_joins), p.joins, { onSpeech(p.copy(joins = it)) })
+    SectionHeader(tr(R.string.speech_emote_cleanup))
+    Text(
+        tr(R.string.speech_emote_cleanup_hint),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    SettingSwitch(
+        tr(R.string.speech_emote_remove_known),
+        p.sanitizer.removeKnownEmotes,
+        { onSpeech(p.copy(sanitizer = p.sanitizer.copy(removeKnownEmotes = it))) },
+    )
+    SettingSwitch(
+        tr(R.string.speech_emote_skip_empty),
+        p.sanitizer.skipEmptyMessages,
+        { onSpeech(p.copy(sanitizer = p.sanitizer.copy(skipEmptyMessages = it))) },
+        tr(R.string.speech_emote_skip_empty_hint),
+    )
+    SettingSwitch(
+        tr(R.string.speech_emote_collapse),
+        p.sanitizer.collapseWhitespace,
+        { onSpeech(p.copy(sanitizer = p.sanitizer.copy(collapseWhitespace = it))) },
+    )
+    SettingSwitch(
+        tr(R.string.speech_emote_remove_unicode),
+        p.sanitizer.removeUnicodeEmoji,
+        { onSpeech(p.copy(sanitizer = p.sanitizer.copy(removeUnicodeEmoji = it))) },
+        tr(R.string.speech_emote_remove_unicode_hint),
+    )
     SectionHeader(tr(R.string.speech_chat_name_mode))
     for (mode in ChatNameMode.entries) {
         val label =

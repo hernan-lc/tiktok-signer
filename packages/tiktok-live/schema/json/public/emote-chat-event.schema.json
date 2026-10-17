@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ttl-live.dev/schema/public/emote-chat-event.schema.json",
+  "title": "ttl-live Emote Chat Event",
+  "x-typescript-name": "EmoteChatEvent",
+  "allOf": [
+    { "$ref": "./base-event.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "emoteChat" },
+        "user": { "$ref": "./event-user.schema.json" },
+        "emotes": {
+          "type": "array",
+          "items": { "$ref": "./live-emote.schema.json" }
+        }
+      },
+      "required": ["type", "user", "emotes"],
+      "additionalProperties": true,
+      "x-typescript-no-index": true
+    }
+  ]
+}

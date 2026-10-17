@@ -1,0 +1,51 @@
+// Generated file. Do not edit manually.
+// Source: schema/json/public/live-emote.schema.json
+
+export type LiveEmote = {
+  id: string;
+  shortcode?: string;
+  imageUrl?: string;
+  index?: number;
+  emoteType?: number;
+  packageId?: string;
+};
+
+export const LiveEmoteSchema = {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ttl-live.dev/schema/public/live-emote.schema.json",
+  "title": "ttl-live Live Emote",
+  "x-typescript-name": "LiveEmote",
+  "description": "A graphical emote carried by a LIVE comment or emote message. Optional fields are omitted when the wire did not carry them; they are never filled with a guessed default.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "The original emote identifier, verbatim."
+    },
+    "shortcode": {
+      "type": "string",
+      "description": "The textual shortcode (for example \"[laughcry]\"), only when reliably known."
+    },
+    "imageUrl": {
+      "type": "string",
+      "format": "uri",
+      "description": "Artwork URL from the protobuf ImageModel."
+    },
+    "index": {
+      "type": "integer",
+      "description": "Raw EmoteWithIndex.index. Its unit is not confirmed, so it is preserved unmodified and never used to slice text."
+    },
+    "emoteType": {
+      "type": "integer",
+      "description": "Raw EmoteModel.emote_type enum value when non-zero."
+    },
+    "packageId": {
+      "type": "string",
+      "description": "Original package identifier for creator-specific or custom emotes."
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "additionalProperties": false
+} as const;

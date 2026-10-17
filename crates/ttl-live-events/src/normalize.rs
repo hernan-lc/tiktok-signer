@@ -6,13 +6,15 @@
 
 use prost::Message;
 use ttl_live_proto::messages::{
-    Contributor, WebcastChatMessage, WebcastGiftMessage, WebcastLikeMessage, WebcastMemberMessage,
-    WebcastRoomUserSeqMessage, WebcastSocialMessage,
+    Contributor, WebcastChatMessage, WebcastEmoteChatMessage, WebcastGiftMessage,
+    WebcastLikeMessage, WebcastMemberMessage, WebcastRoomUserSeqMessage, WebcastSocialMessage,
 };
+use ttl_live_proto::webcast::model::base::emoji::EmoteModel;
 use ttl_live_proto::webcast::model::Gift;
 
 use crate::event::{
-    ChatEvent, GiftEvent, LikeEvent, LiveEvent, MemberEvent, RoomUserEvent, SocialEvent,
+    ChatEvent, EmoteChatEvent, GiftEvent, LikeEvent, LiveEmote, LiveEvent, MemberEvent,
+    RoomUserEvent, SocialEvent, MAX_EMOTES_PER_EVENT, MAX_EMOTE_ID_LENGTH, MAX_EMOTE_URL_LENGTH,
 };
 use crate::user::EventUser;
 
@@ -28,7 +30,85 @@ pub(crate) fn chat(payload: &[u8]) -> Result<LiveEvent, prost::DecodeError> {
     Ok(LiveEvent::Chat(ChatEvent {
         user: EventUser::normalize(message.user.as_ref()),
         comment: message.content,
+        emotes: message
+            .emotes
+            .iter()
+            .filter_map(|inline| normalize_emote(inline.emote.as_ref(), Some(inline.index)))
+            .take(MAX_EMOTES_PER_EVENT)
+            .collect(),
     }))
+}
+
+pub(crate) fn emote_chat(payload: &[u8]) -> Result<LiveEvent, prost::DecodeError> {
+    let message = WebcastEmoteChatMessage::decode(payload)?;
+    Ok(LiveEvent::EmoteChat(EmoteChatEvent {
+        user: EventUser::normalize(message.user.as_ref()),
+        // Standalone emotes carry no `EmoteWithIndex`, so there is no index.
+        emotes: message
+            .emote_list
+            .iter()
+            .filter_map(|emote| normalize_emote(Some(emote), None))
+            .take(MAX_EMOTES_PER_EVENT)
+            .collect(),
+    }))
+}
+
+/// Maps one generated `EmoteModel` (plus the enclosing index, when the message
+/// supplies one) onto the stable [`LiveEmote`].
+///
+/// Infallible: every failure path degrades by keeping the emote with less
+/// metadata, never by failing the whole chat message. `None` is returned only
+/// when there is nothing usable to keep — no id and no artwork.
+fn normalize_emote(emote: Option<&EmoteModel>, index: Option<i32>) -> Option<LiveEmote> {
+    let emote = emote?;
+    if emote.emote_id.len() > MAX_EMOTE_ID_LENGTH {
+        // A mangled id is worse than a missing one: never truncate into a
+        // colliding identifier.
+        return None;
+    }
+    let image_url = emote_image_url(emote);
+    if emote.emote_id.is_empty() && image_url.is_none() {
+        return None;
+    }
+    Some(LiveEmote {
+        id: emote.emote_id.clone(),
+        // No v3 field is verified to be the textual shortcode; see `LiveEmote`.
+        shortcode: None,
+        image_url,
+        index,
+        emote_type: (emote.emote_type != 0).then_some(emote.emote_type),
+        package_id: (!emote.package_id.is_empty()).then(|| emote.package_id.clone()),
+    })
+}
+
+/// First usable artwork URL from the emote's `ImageModel`.
+fn emote_image_url(emote: &EmoteModel) -> Option<String> {
+    emote
+        .image
+        .as_ref()?
+        .url_list
+        .iter()
+        .find_map(|url| sanitize_image_url(url))
+}
+
+/// Accepts an absolute `http`/`https` URL and rejects everything else, including
+/// unsafe schemes (`javascript:`, `data:`, `file:`), embedded control characters
+/// and over-long values. All metadata here is untrusted.
+fn sanitize_image_url(url: &str) -> Option<String> {
+    if url.len() > MAX_EMOTE_URL_LENGTH {
+        return None;
+    }
+    if url.chars().any(|c| c.is_control() || c == ' ') {
+        return None;
+    }
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
+    // Require a host: a bare scheme or `https:///x` is not a usable URL.
+    if rest.is_empty() || rest.starts_with('/') {
+        return None;
+    }
+    Some(url.to_owned())
 }
 
 pub(crate) fn gift(payload: &[u8]) -> Result<LiveEvent, prost::DecodeError> {

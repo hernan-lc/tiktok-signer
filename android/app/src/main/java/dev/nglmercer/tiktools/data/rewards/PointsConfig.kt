@@ -110,6 +110,7 @@ object PointsEngine {
             LiveEvent.Category.JOIN ->
                 if (config.pointsPerJoinEnabled) config.pointsPerJoin else 0.0
             LiveEvent.Category.MEMBER,
+            LiveEvent.Category.EMOTE,
             LiveEvent.Category.SOCIAL,
             LiveEvent.Category.ROOM,
             LiveEvent.Category.UNKNOWN -> 0.0

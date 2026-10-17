@@ -511,3 +511,33 @@ as a new run of those later initialization changes.
 - Sanitizer coverage is Rust-native/caller coverage, not full instrumentation of
   embedded third-party C/C++ engines. Allocator/engine-global memory retention is
   distinguished from live queue/context ownership in the measurements.
+
+## Emote decoding
+
+`cargo run --release -p ttl-live-events --example emote_bench` measures the
+marginal cost of emote decoding on the same normalization path the transport
+uses: a plain text chat, the same chat carrying three inline emotes, a standalone
+emote message, and a 1000-message mixed batch (one third text chat, one third
+inline-emote chat, one third emote-only). The benchmark asserts emotes were
+actually decoded, so it cannot pass by silently dropping them.
+
+One shared-host release sample (20,000 per-event iterations, 200 batch
+iterations), instrumented allocator:
+
+| Workload | Events/sec | ns/event | Alloc calls/event | Requested bytes/event |
+| --- | ---: | ---: | ---: | ---: |
+| Plain text chat (`decode_event`) | 413,398 | 2,419 | 16.00 | 833 |
+| Inline chat with 3 emotes (`decode_event`) | 128,452 | 7,785 | 78.00 | 78,312 |
+| Standalone emote message, 2 emotes (`decode_event`) | 246,262 | 4,061 | 44.00 | 34,086 |
+| Mixed batch, `DecodeMode::Normalized` | 202,928 | 4,928 | 21.66 | 35,792 |
+| Mixed batch, legacy `decode_batch` | 134,336 | 7,444 | 48.98 | 38,480 |
+
+Two caveats keep these from being an emote-regression claim. `decode_event`
+always materializes the descriptor schema tree, so the per-event figures are
+dominated by that shared cost, not by `LiveEmote`; the production normalized path
+(`decode_batch_with_mode`) does not build a schema tree for a message it
+normalized. And these are single-run shared-host samples — they show the mixed
+pipeline sustains roughly 200k events/sec, orders of magnitude above any observed
+TikTok push rate, while emote extraction adds one small `LiveEmote` per emote
+(id, package id, validated URL). No before/after percentage is claimed; a
+comparison against a prior binary was not run for this change.

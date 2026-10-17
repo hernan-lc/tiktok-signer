@@ -23,6 +23,7 @@ import { normalizeUniqueId } from './unique-id.js';
 import { EVENT, decodeEvent } from './events.js';
 import type {
   ChatEvent,
+  EmoteChatEvent,
   Gift,
   GiftEvent,
   LikeEvent,
@@ -68,6 +69,7 @@ export interface TikTokLiveEvents {
   error: [Error];
   event: [LiveEvent];
   chat: [ChatEvent];
+  emoteChat: [EmoteChatEvent];
   gift: [GiftEvent];
   like: [LikeEvent];
   member: [MemberEvent];
@@ -476,6 +478,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   #emitTypedEvent(event: LiveEvent): void {
     switch (event.type) {
       case EVENT.chat: this.emit('chat', event); break;
+      case EVENT.emoteChat: this.emit('emoteChat', event); break;
       case EVENT.gift: this.emit('gift', event); break;
       case EVENT.like: this.emit('like', event); break;
       case EVENT.member: this.emit('member', event); break;

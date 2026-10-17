@@ -8,6 +8,7 @@ import { fromBinary } from '@bufbuild/protobuf';
 
 import {
   WebcastChatMessageSchema,
+  WebcastEmoteChatMessageSchema,
   WebcastGiftMessageSchema,
   WebcastLikeMessageSchema,
   WebcastMemberMessageSchema,
@@ -15,14 +16,17 @@ import {
   WebcastSocialMessageSchema,
 } from './gen/webcast/model/message/messages_pb.js';
 import { UserSchema } from './gen/webcast/model/base/user_2_pb.js';
+import type { EmoteModel, EmoteWithIndex } from './gen/webcast/model/base/emoji_pb.js';
 import type { ImageModel } from './gen/webcast/model/base/messages_pb.js';
 import type { User } from './gen/webcast/model/base/user_2_pb.js';
 import type { Contributor } from './gen/webcast/model/message/messages_pb.js';
 import type {
   ChatEvent,
+  EmoteChatEvent,
   EventUser,
   GiftEvent,
   LikeEvent,
+  LiveEmote,
   LiveEvent,
   MemberEvent,
   RoomUserEvent,
@@ -38,6 +42,7 @@ function methodName<T extends string>(schema: { readonly typeName: `${string}.${
 /// Schema method names for the events normalised here, derived from generated descriptors.
 export const METHOD = Object.freeze({
   chat: methodName(WebcastChatMessageSchema),
+  emoteChat: methodName(WebcastEmoteChatMessageSchema),
   gift: methodName(WebcastGiftMessageSchema),
   like: methodName(WebcastLikeMessageSchema),
   member: methodName(WebcastMemberMessageSchema),
@@ -48,6 +53,7 @@ export const METHOD = Object.freeze({
 /// The event names a client emits, including the two that are not schema messages.
 export const EVENT = Object.freeze({
   chat: 'chat',
+  emoteChat: 'emoteChat',
   gift: 'gift',
   like: 'like',
   member: 'member',
@@ -55,6 +61,14 @@ export const EVENT = Object.freeze({
   roomUser: 'roomUser',
   unknown: 'unknown',
 });
+
+/// Emote bounds, mirroring `ttl_live_events::{MAX_EMOTES_PER_EVENT, MAX_EMOTE_ID_LENGTH,
+/// MAX_EMOTE_URL_LENGTH}`. Counted in UTF-8 bytes so both implementations bound the same wire data.
+export const MAX_EMOTES_PER_EVENT = 64;
+export const MAX_EMOTE_ID_LENGTH = 128;
+export const MAX_EMOTE_URL_LENGTH = 2048;
+
+const utf8Length = (value: string): number => new TextEncoder().encode(value).length;
 
 // --- generated message adapters ----------------------------------------------------------------
 
@@ -102,6 +116,64 @@ function normalizeUser(user: User | undefined): EventUser {
 /// Decode a generated v3 User message, or return the same blank user for no nested message.
 export function decodeUser(payload?: Uint8Array): EventUser {
   return normalizeUser(fromBinary(UserSchema, payload ?? new Uint8Array(), { readUnknownFields: false }));
+}
+
+/**
+ * An absolute `http(s)` URL, with no control characters or spaces and within the length bound.
+ * Every emote field is untrusted, so anything else is dropped while the emote itself is kept.
+ * Mirrors `normalize::sanitize_image_url` in Rust.
+ */
+function sanitizeImageUrl(url: string): string | undefined {
+  if (utf8Length(url) > MAX_EMOTE_URL_LENGTH) return undefined;
+  for (const character of url) {
+    const code = character.codePointAt(0) as number;
+    const control = code < 0x20 || (code >= 0x7f && code <= 0x9f);
+    if (control || character === ' ') return undefined;
+  }
+  const rest = url.startsWith('https://')
+    ? url.slice('https://'.length)
+    : url.startsWith('http://')
+      ? url.slice('http://'.length)
+      : undefined;
+  if (rest === undefined || rest.length === 0 || rest.startsWith('/')) return undefined;
+  return url;
+}
+
+/**
+ * Map one generated emote onto the stable public shape.
+ *
+ * Optional fields are omitted, never sent as a "confirmed" default, and `shortcode` is never
+ * fabricated: the v3 schema has no field verified to be the textual one, so a numeric id must not
+ * become a display name. Mirrors `normalize::normalize_emote` in Rust.
+ */
+export function normalizeEmote(emote: EmoteModel | undefined, index?: number): LiveEmote | undefined {
+  if (!emote) return undefined;
+  if (utf8Length(emote.emoteId) > MAX_EMOTE_ID_LENGTH) return undefined;
+  const emoteType = Number(emote.emoteType);
+  const imageUrl = emote.image?.urlList.map(sanitizeImageUrl).find((url) => url !== undefined);
+  if (emote.emoteId.length === 0 && imageUrl === undefined) return undefined;
+
+  const normalized: LiveEmote = { id: emote.emoteId };
+  if (imageUrl !== undefined) normalized.imageUrl = imageUrl;
+  if (index !== undefined) normalized.index = index;
+  if (emoteType !== 0) normalized.emoteType = emoteType;
+  if (emote.packageId.length > 0) normalized.packageId = emote.packageId;
+  return normalized;
+}
+
+/// Shared collector: drop unusable emotes, keep wire order, and bound the count.
+function collectEmotes(normalized: Array<LiveEmote | undefined>): LiveEmote[] {
+  return normalized.filter((emote) => emote !== undefined).slice(0, MAX_EMOTES_PER_EVENT);
+}
+
+/// Inline `WebcastChatMessage.emotes` (each with its raw index).
+export function normalizeInlineEmotes(emotes: readonly EmoteWithIndex[]): LiveEmote[] {
+  return collectEmotes(emotes.map((inline) => normalizeEmote(inline.emote, inline.index)));
+}
+
+/// Standalone `WebcastEmoteChatMessage.emote_list` (no index on the wire).
+export function normalizeStandaloneEmotes(emotes: readonly EmoteModel[]): LiveEmote[] {
+  return collectEmotes(emotes.map((emote) => normalizeEmote(emote, undefined)));
 }
 
 /// Best available label for a user, preferring the stable handle.
@@ -155,6 +227,7 @@ export function classifySocialAction(action: number): SocialClassification {
 
 type NormalizedEvent =
   | Omit<ChatEvent, 'method'>
+  | Omit<EmoteChatEvent, 'method'>
   | Omit<GiftEvent, 'method'>
   | Omit<LikeEvent, 'method'>
   | Omit<MemberEvent, 'method'>
@@ -165,11 +238,23 @@ type Normalizer = (payload: Uint8Array) => NormalizedEvent;
 const NORMALIZE: Record<string, Normalizer> = {
   [METHOD.chat]: (payload) => {
     const message = fromBinary(WebcastChatMessageSchema, payload, { readUnknownFields: false });
+    const emotes = normalizeInlineEmotes(message.emotes);
     return {
       type: EVENT.chat,
       user: normalizeUser(message.user),
       comment: message.content,
+      // Omitted when empty so a text-only comment is unchanged from the previous release.
+      ...(emotes.length > 0 ? { emotes } : {}),
     } satisfies Omit<ChatEvent, 'method'>;
+  },
+  [METHOD.emoteChat]: (payload) => {
+    const message = fromBinary(WebcastEmoteChatMessageSchema, payload, { readUnknownFields: false });
+    // A standalone emote message has no text comment; it stays a first-class event of its own.
+    return {
+      type: EVENT.emoteChat,
+      user: normalizeUser(message.user),
+      emotes: normalizeStandaloneEmotes(message.emoteList),
+    } satisfies Omit<EmoteChatEvent, 'method'>;
   },
   [METHOD.gift]: (payload) => {
     const message = fromBinary(WebcastGiftMessageSchema, payload, { readUnknownFields: false });
@@ -245,6 +330,7 @@ const NORMALIZE: Record<string, Normalizer> = {
 /// Normalise one generated message. Never throws: an unmodelled method, or a payload that does
 /// not decode, becomes `unknown` with its bytes kept, so one bad event cannot take a batch down.
 export function decodeEvent(method: typeof METHOD.chat, payload: Uint8Array): ChatEvent | UnknownEvent;
+export function decodeEvent(method: typeof METHOD.emoteChat, payload: Uint8Array): EmoteChatEvent | UnknownEvent;
 export function decodeEvent(method: typeof METHOD.gift, payload: Uint8Array): GiftEvent | UnknownEvent;
 export function decodeEvent(method: typeof METHOD.like, payload: Uint8Array): LikeEvent | UnknownEvent;
 export function decodeEvent(method: typeof METHOD.member, payload: Uint8Array): MemberEvent | UnknownEvent;

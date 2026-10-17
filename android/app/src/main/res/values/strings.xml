@@ -128,6 +128,7 @@
 
     <!-- Event category names and summaries. -->
     <string name="category_chat">Chat</string>
+    <string name="category_emote">Emote</string>
     <string name="category_gift">Gift</string>
     <string name="category_like">Like</string>
     <string name="category_follow">Follow</string>
@@ -140,6 +141,7 @@
     <string name="event_gift_summary">%1$s ×%2$d · %3$d diamonds</string>
     <string name="event_member_summary">Member action %1$d</string>
     <string name="event_social_summary">Social action %1$d</string>
+    <string name="event_emote_summary">%1$d emote(s)</string>
     <string name="event_shared">Shared the LIVE</string>
     <string name="event_followed">Followed</string>
     <string name="event_joined">Joined</string>
@@ -295,6 +297,14 @@
     <string name="speech_follows">Follows</string>
     <string name="speech_shares">Shares</string>
     <string name="speech_joins">Joins</string>
+    <string name="speech_emote_cleanup">Emote cleanup</string>
+    <string name="speech_emote_cleanup_hint">Recognized emote shortcodes are removed before speech. Unknown bracketed text is left as written.</string>
+    <string name="speech_emote_remove_known">Skip recognized emotes</string>
+    <string name="speech_emote_skip_empty">Stay silent for emotes only</string>
+    <string name="speech_emote_skip_empty_hint">A comment made only of emotes says nothing, not just the sender\'s name.</string>
+    <string name="speech_emote_collapse">Tidy spacing</string>
+    <string name="speech_emote_remove_unicode">Also remove emoji</string>
+    <string name="speech_emote_remove_unicode_hint">Off by default so emoji are spoken as sent.</string>
     <string name="speech_chat_name_mode">Chat name</string>
     <string name="speech_chat_name_always">Every message</string>
     <string name="speech_chat_name_changed">When the speaker changes</string>

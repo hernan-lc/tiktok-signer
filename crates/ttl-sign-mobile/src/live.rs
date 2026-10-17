@@ -176,6 +176,7 @@ mod tests {
         let json = event_json(&LiveEvent::Chat(ChatEvent {
             user: user(),
             comment: "hello".into(),
+            ..Default::default()
         }));
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(value["type"], "chat");

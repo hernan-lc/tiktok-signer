@@ -2,6 +2,7 @@ package io.github.nglmercer.tiktoklive;
 
 public sealed interface LiveEvent
         permits ChatEvent,
+                EmoteChatEvent,
                 GiftEvent,
                 LikeEvent,
                 MemberEvent,

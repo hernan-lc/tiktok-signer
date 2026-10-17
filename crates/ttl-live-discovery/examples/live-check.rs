@@ -296,6 +296,14 @@ fn describe(event: &LiveEvent) -> (&'static str, Option<String>) {
             "gift",
             Some(format!("{} sent gift {}", gift.user.nickname, gift.gift_id)),
         ),
+        LiveEvent::EmoteChat(emote) => (
+            "emote_chat",
+            Some(format!(
+                "{} sent {} emote(s)",
+                emote.user.nickname,
+                emote.emotes.len()
+            )),
+        ),
         LiveEvent::Like(like) => ("like", Some(format!("{} liked", like.user.nickname))),
         LiveEvent::Member(member) => ("member", Some(format!("{} joined", member.user.nickname))),
         LiveEvent::Social(_) => ("social", None),

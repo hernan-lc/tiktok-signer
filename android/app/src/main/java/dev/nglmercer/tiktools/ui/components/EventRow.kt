@@ -22,6 +22,7 @@ import java.util.*
 fun LiveEvent.Category.icon(): ImageVector =
     when (this) {
         LiveEvent.Category.CHAT -> Icons.Outlined.ChatBubbleOutline
+        LiveEvent.Category.EMOTE -> Icons.Outlined.EmojiEmotions
         LiveEvent.Category.GIFT -> Icons.Outlined.CardGiftcard
         LiveEvent.Category.LIKE -> Icons.Outlined.FavoriteBorder
         LiveEvent.Category.FOLLOW -> Icons.Outlined.PersonAddAlt
@@ -37,6 +38,7 @@ fun LiveEvent.Category.icon(): ImageVector =
 fun LiveEvent.summary(): String =
     when (category) {
         LiveEvent.Category.CHAT -> text
+        LiveEvent.Category.EMOTE -> stringResource(R.string.event_emote_summary, count)
         LiveEvent.Category.GIFT ->
             stringResource(
                 R.string.event_gift_summary,

@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import dev.nglmercer.tiktools.core.model.*
 import dev.nglmercer.tiktools.data.rewards.PointsConfig
+import dev.nglmercer.tiktools.tts.SanitizerSettings
 import dev.nglmercer.tiktools.tts.TtsEngine
 import dev.nglmercer.tiktools.tts.supertonic.LanguageMode
 import dev.nglmercer.tiktools.tts.supertonic.QualityPreset
@@ -61,6 +62,10 @@ class PreferencesRepository(
             it[booleanPreferencesKey("speech_diagnostic_logging")] = p.diagnosticLogging
             it[booleanPreferencesKey("speech_export_wav")] = p.exportWav
             it[intPreferencesKey("speech_max_chars")] = p.maxSpeechChars
+            it[booleanPreferencesKey("speech_emote_remove_known")] = p.sanitizer.removeKnownEmotes
+            it[booleanPreferencesKey("speech_emote_remove_unicode")] = p.sanitizer.removeUnicodeEmoji
+            it[booleanPreferencesKey("speech_emote_collapse")] = p.sanitizer.collapseWhitespace
+            it[booleanPreferencesKey("speech_emote_skip_empty")] = p.sanitizer.skipEmptyMessages
         }
 
     suspend fun setRewards(p: PointsConfig) =
@@ -162,6 +167,15 @@ class PreferencesRepository(
                         maxSpeechChars =
                             p[intPreferencesKey("speech_max_chars")]?.coerceAtLeast(0)
                                 ?: SupertonicQuality.DEFAULT_MAX_CHARS,
+                        // Emote cleanup is on by default for existing installs: a shortcode token
+                        // spoken aloud is noise, and unknown bracketed text is preserved anyway.
+                        sanitizer =
+                            SanitizerSettings(
+                                removeKnownEmotes = bool("speech_emote_remove_known", true),
+                                removeUnicodeEmoji = bool("speech_emote_remove_unicode", false),
+                                collapseWhitespace = bool("speech_emote_collapse", true),
+                                skipEmptyMessages = bool("speech_emote_skip_empty", true),
+                            ),
                     ),
                 rewards =
                     string("config")?.let {

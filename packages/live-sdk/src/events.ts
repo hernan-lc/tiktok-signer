@@ -2,11 +2,17 @@
 export {
   EVENT,
   METHOD,
+  MAX_EMOTES_PER_EVENT,
+  MAX_EMOTE_ID_LENGTH,
+  MAX_EMOTE_URL_LENGTH,
   SOCIAL_ACTION,
   classifySocialAction,
   decodeEvent,
   decodeUser,
   label,
+  normalizeEmote,
+  normalizeInlineEmotes,
+  normalizeStandaloneEmotes,
   safeCount,
 } from '../../tiktok-live/src/events.js';
 export type {
@@ -16,10 +22,12 @@ export type {
 } from '../../tiktok-live/src/events.js';
 export type {
   ChatEvent,
+  EmoteChatEvent,
   EventUser,
   Gift,
   GiftEvent,
   LikeEvent,
+  LiveEmote,
   LiveEvent,
   MemberEvent,
   RoomUserEvent,

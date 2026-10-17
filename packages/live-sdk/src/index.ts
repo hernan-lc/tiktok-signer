@@ -36,13 +36,29 @@ export {
   frameHeaders,
   heartbeatFrame,
 } from './protocol.js';
-export { EVENT, METHOD, SOCIAL_ACTION, decodeEvent, decodeUser, label, safeCount } from './events.js';
+export {
+  EVENT,
+  METHOD,
+  MAX_EMOTES_PER_EVENT,
+  MAX_EMOTE_ID_LENGTH,
+  MAX_EMOTE_URL_LENGTH,
+  SOCIAL_ACTION,
+  decodeEvent,
+  decodeUser,
+  label,
+  normalizeEmote,
+  normalizeInlineEmotes,
+  normalizeStandaloneEmotes,
+  safeCount,
+} from './events.js';
 export type {
   ChatEvent,
+  EmoteChatEvent,
   EventUser,
   Gift,
   GiftEvent,
   LikeEvent,
+  LiveEmote,
   LiveEvent,
   MemberEvent,
   RoomUserEvent,

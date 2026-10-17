@@ -50,6 +50,7 @@ fun LiveEvent.Category.localizedName(): String =
     tr(
         when (this) {
             LiveEvent.Category.CHAT -> R.string.category_chat
+            LiveEvent.Category.EMOTE -> R.string.category_emote
             LiveEvent.Category.GIFT -> R.string.category_gift
             LiveEvent.Category.LIKE -> R.string.category_like
             LiveEvent.Category.FOLLOW -> R.string.category_follow

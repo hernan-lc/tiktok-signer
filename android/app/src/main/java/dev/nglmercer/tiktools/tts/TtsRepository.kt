@@ -168,6 +168,7 @@ class TtsRepository(
                 includeChatName = includeChatName,
                 chatPrefix = p.chatPrefix,
                 phrases = phrases,
+                sanitizer = p.sanitizer,
             )
         )
     }

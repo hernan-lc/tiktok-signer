@@ -10,7 +10,12 @@
       "properties": {
         "type": { "const": "chat" },
         "user": { "$ref": "./event-user.schema.json" },
-        "comment": { "type": "string" }
+        "comment": { "type": "string" },
+        "emotes": {
+          "type": "array",
+          "items": { "$ref": "./live-emote.schema.json" },
+          "description": "Emotes embedded in the comment. Omitted (never required) so text-only chat stays compatible."
+        }
       },
       "required": ["type", "user", "comment"],
       "additionalProperties": true,

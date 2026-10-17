@@ -282,6 +282,7 @@ pub unsafe extern "C" fn ttl_event_normalized_type(e: *const NativeEvent) -> i32
             Some(LiveEvent::Member(_)) => 4,
             Some(LiveEvent::Social(_)) => 5,
             Some(LiveEvent::RoomUser(_)) => 6,
+            Some(LiveEvent::EmoteChat(_)) => 7,
             _ => 0,
         }
     })

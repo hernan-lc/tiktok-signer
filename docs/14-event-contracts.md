@@ -1,8 +1,13 @@
 # Public event contracts
 
 `ttl-live-events` is the canonical source for normalized TikTok LIVE event
-values. The public contract includes `EventUser`, `ChatEvent`, `GiftEvent`,
-`LikeEvent`, `MemberEvent`, `SocialEvent`, and `RoomUserEvent`.
+values. The public contract includes `EventUser`, `LiveEmote`, `ChatEvent`,
+`EmoteChatEvent`, `GiftEvent`, `LikeEvent`, `MemberEvent`, `SocialEvent`, and
+`RoomUserEvent`.
+
+`ChatEvent.emotes` and the standalone `EmoteChatEvent` are documented in
+[20-live-emotes.md](20-live-emotes.md). A text-only comment omits the `emotes`
+key entirely, so the pre-existing chat contract is unchanged.
 
 The contract pipeline is:
 

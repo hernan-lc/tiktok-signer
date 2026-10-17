@@ -24,10 +24,11 @@ use std::{env, fs};
 
 use prost::Message;
 use ttl_live_proto::messages::{
-    WebcastGiftMessage, WebcastLikeMessage, WebcastMemberMessage, WebcastRoomUserSeqMessage,
-    WebcastSocialMessage,
+    WebcastChatMessage, WebcastEmoteChatMessage, WebcastGiftMessage, WebcastLikeMessage,
+    WebcastMemberMessage, WebcastRoomUserSeqMessage, WebcastSocialMessage,
 };
-use ttl_live_proto::webcast::model::base::user::User;
+use ttl_live_proto::webcast::model::base::emoji::{EmoteModel, EmoteWithIndex};
+use ttl_live_proto::webcast::model::base::{user::User, ImageModel};
 use ttl_live_proto::webcast::model::Gift;
 use ttl_live_proto::ProtoMessageFetchResult;
 
@@ -47,6 +48,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("share.pb", share().encode_to_vec()),
         ("social-unknown.pb", social_unknown().encode_to_vec()),
         ("room-user.pb", room_user().encode_to_vec()),
+        ("chat-inline-emote.pb", chat_inline_emote().encode_to_vec()),
+        (
+            "chat-multiple-emotes.pb",
+            chat_multiple_emotes().encode_to_vec(),
+        ),
+        (
+            "chat-unicode-emote.pb",
+            chat_unicode_emote().encode_to_vec(),
+        ),
+        (
+            "chat-invalid-emote.pb",
+            chat_invalid_emote().encode_to_vec(),
+        ),
+        ("emote-chat.pb", emote_chat().encode_to_vec()),
     ];
 
     if let Some(capture) = args.next() {
@@ -183,6 +198,143 @@ fn room_user() -> WebcastRoomUserSeqMessage {
         popularity: 2048,
         total_user: 55391,
         anonymous: 17,
+        ..Default::default()
+    }
+}
+
+/// An emote artwork block with a single URL, as the room sends it.
+fn emote_image(url: &str) -> ImageModel {
+    ImageModel {
+        url_list: vec![url.to_owned()],
+        ..Default::default()
+    }
+}
+
+/// A named emote package. `emote_type` is the raw `EmoteType` enum value;
+/// `0` (`EMOTE_TYPE_NORMAL`) is omitted from the normalized `emoteType`.
+fn emote(id: &str, url: &str, emote_type: i32, package_id: &str) -> EmoteModel {
+    EmoteModel {
+        emote_id: id.to_owned(),
+        image: Some(emote_image(url)),
+        emote_type,
+        package_id: package_id.to_owned(),
+        ..Default::default()
+    }
+}
+
+/// A single inline emote in a text comment.
+///
+/// `index` is the raw `EmoteWithIndex.index` (here the UTF-8 byte offset of the
+/// `[` in `"Hello [laughcry]"`); it is preserved without conversion.
+fn chat_inline_emote() -> WebcastChatMessage {
+    WebcastChatMessage {
+        content: "Hello [laughcry]".to_owned(),
+        user: Some(user()),
+        emotes: vec![EmoteWithIndex {
+            index: 6,
+            emote: Some(emote(
+                "7098",
+                "https://p16-webcast.tiktokcdn.com/img/emote/laughcry.webp",
+                1,
+                "7100000000000000001",
+            )),
+        }],
+        ..Default::default()
+    }
+}
+
+/// Two inline emotes in one comment, so order and per-emote metadata are pinned.
+fn chat_multiple_emotes() -> WebcastChatMessage {
+    WebcastChatMessage {
+        content: "Hola [happy] amigo [wow]".to_owned(),
+        user: Some(user()),
+        emotes: vec![
+            EmoteWithIndex {
+                index: 5,
+                emote: Some(emote(
+                    "7099",
+                    "https://p16-webcast.tiktokcdn.com/img/emote/happy.webp",
+                    0,
+                    "",
+                )),
+            },
+            EmoteWithIndex {
+                index: 19,
+                emote: Some(emote(
+                    "7100",
+                    "https://p16-webcast.tiktokcdn.com/img/emote/wow.webp",
+                    0,
+                    "",
+                )),
+            },
+        ],
+        ..Default::default()
+    }
+}
+
+/// A CJK comment with an emote, so the normaliser is proven not to touch the
+/// original (multibyte) text while it extracts the emote.
+fn chat_unicode_emote() -> WebcastChatMessage {
+    WebcastChatMessage {
+        content: "こんにちは [laughcry]".to_owned(),
+        user: Some(user()),
+        emotes: vec![EmoteWithIndex {
+            index: 16,
+            emote: Some(emote(
+                "7098",
+                "https://p16-webcast.tiktokcdn.com/img/emote/laughcry.webp",
+                0,
+                "",
+            )),
+        }],
+        ..Default::default()
+    }
+}
+
+/// Malformed metadata must degrade per-emote, never fail the message:
+///
+/// * the first emote keeps its id but loses its unsafe `javascript:` URL;
+/// * the second carries neither an id nor an image and is dropped entirely.
+fn chat_invalid_emote() -> WebcastChatMessage {
+    WebcastChatMessage {
+        content: "Bad [emote]".to_owned(),
+        user: Some(user()),
+        emotes: vec![
+            EmoteWithIndex {
+                index: 4,
+                emote: Some(EmoteModel {
+                    emote_id: "7091".to_owned(),
+                    image: Some(emote_image("javascript:alert(1)")),
+                    ..Default::default()
+                }),
+            },
+            EmoteWithIndex {
+                index: 10,
+                emote: Some(EmoteModel::default()),
+            },
+        ],
+        ..Default::default()
+    }
+}
+
+/// A standalone `WebcastEmoteChatMessage`: two emotes and no text comment.
+fn emote_chat() -> WebcastEmoteChatMessage {
+    WebcastEmoteChatMessage {
+        user: Some(user()),
+        emote_list: vec![
+            emote(
+                "7099",
+                "https://p16-webcast.tiktokcdn.com/img/emote/happy.webp",
+                0,
+                "7100000000000000002",
+            ),
+            emote(
+                "7100",
+                "https://p16-webcast.tiktokcdn.com/img/emote/wow.webp",
+                0,
+                "",
+            ),
+        ],
         ..Default::default()
     }
 }

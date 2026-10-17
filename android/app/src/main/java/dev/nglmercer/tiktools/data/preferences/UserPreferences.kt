@@ -3,6 +3,7 @@ package dev.nglmercer.tiktools.data.preferences
 import dev.nglmercer.tiktools.core.model.EventDisplayConfig
 import dev.nglmercer.tiktools.core.model.EventFilter
 import dev.nglmercer.tiktools.data.rewards.PointsConfig
+import dev.nglmercer.tiktools.tts.SanitizerSettings
 import dev.nglmercer.tiktools.tts.TtsEngine
 import dev.nglmercer.tiktools.tts.supertonic.LanguageMode
 import dev.nglmercer.tiktools.tts.supertonic.QualityPreset
@@ -40,6 +41,8 @@ data class SpeechPreferences(
     val exportWav: Boolean = false,
     /** LIVE speech-length cap in characters; `0` speaks everything (the default). */
     val maxSpeechChars: Int = SupertonicQuality.DEFAULT_MAX_CHARS,
+    /** How a chat comment is cleaned before speech; applies to every engine. */
+    val sanitizer: SanitizerSettings = SanitizerSettings(),
 )
 
 enum class ChatNameMode {

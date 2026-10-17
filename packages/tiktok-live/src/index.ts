@@ -18,11 +18,17 @@ export { Discovery, WebcastRefusal, ROOM_STATUS_LIVE, parseId } from './discover
 export {
   EVENT,
   METHOD,
+  MAX_EMOTES_PER_EVENT,
+  MAX_EMOTE_ID_LENGTH,
+  MAX_EMOTE_URL_LENGTH,
   SOCIAL_ACTION,
   classifySocialAction,
   decodeEvent,
   decodeUser,
   label,
+  normalizeEmote,
+  normalizeInlineEmotes,
+  normalizeStandaloneEmotes,
   safeCount,
 } from './events.js';
 export type { SocialClassification, SocialConfidence, SocialKind } from './events.js';

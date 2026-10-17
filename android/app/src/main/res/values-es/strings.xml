@@ -116,6 +116,7 @@
     <string name="speech_someone">alguien</string>
 
     <string name="category_chat">Chat</string>
+    <string name="category_emote">Emoticono</string>
     <string name="category_gift">Regalo</string>
     <string name="category_like">Me gusta</string>
     <string name="category_follow">Seguir</string>
@@ -128,6 +129,7 @@
     <string name="event_gift_summary">%1$s ×%2$d · %3$d diamantes</string>
     <string name="event_member_summary">Acción de miembro %1$d</string>
     <string name="event_social_summary">Acción social %1$d</string>
+    <string name="event_emote_summary">%1$d emoticono(s)</string>
     <string name="event_shared">Compartió el LIVE</string>
     <string name="event_followed">Empezó a seguir</string>
     <string name="event_joined">Se unió</string>
@@ -277,6 +279,14 @@
     <string name="speech_follows">Seguidores</string>
     <string name="speech_shares">Compartidos</string>
     <string name="speech_joins">Uniones</string>
+    <string name="speech_emote_cleanup">Limpieza de emoticonos</string>
+    <string name="speech_emote_cleanup_hint">Los códigos de emoticono reconocidos se eliminan antes de hablar. El texto entre corchetes desconocido se deja tal cual.</string>
+    <string name="speech_emote_remove_known">Omitir emoticonos reconocidos</string>
+    <string name="speech_emote_skip_empty">Silencio si solo hay emoticonos</string>
+    <string name="speech_emote_skip_empty_hint">Un comentario solo de emoticonos no dice nada, ni siquiera el nombre de quien lo envía.</string>
+    <string name="speech_emote_collapse">Ordenar espacios</string>
+    <string name="speech_emote_remove_unicode">Quitar también emoji</string>
+    <string name="speech_emote_remove_unicode_hint">Desactivado por defecto para leer los emoji tal como se envían.</string>
     <string name="speech_chat_name_mode">Nombre en el chat</string>
     <string name="speech_chat_name_always">En cada mensaje</string>
     <string name="speech_chat_name_changed">Cuando cambia quien habla</string>

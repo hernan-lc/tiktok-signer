@@ -7,6 +7,7 @@
 
 import type { BaseEvent as GeneratedBaseEvent } from './gen/json/public/base-event.js';
 import type { ChatEvent as GeneratedChatEvent } from './gen/json/public/chat-event.js';
+import type { EmoteChatEvent as GeneratedEmoteChatEvent } from './gen/json/public/emote-chat-event.js';
 import type { GiftEvent as GeneratedGiftEvent } from './gen/json/public/gift-event.js';
 import type { LikeEvent as GeneratedLikeEvent } from './gen/json/public/like-event.js';
 import type { MemberEvent as GeneratedMemberEvent } from './gen/json/public/member-event.js';
@@ -16,10 +17,12 @@ import type { SocialEvent as GeneratedSocialEvent } from './gen/json/public/soci
 export type { BaseEvent } from './gen/json/public/base-event.js';
 export type { ChatEvent } from './gen/json/public/chat-event.js';
 export type { ClientState } from './gen/json/public/client-state.js';
+export type { EmoteChatEvent } from './gen/json/public/emote-chat-event.js';
 export type { EventUser } from './gen/json/public/event-user.js';
 export type { Gift } from './gen/json/public/gift.js';
 export type { GiftEvent } from './gen/json/public/gift-event.js';
 export type { LikeEvent } from './gen/json/public/like-event.js';
+export type { LiveEmote } from './gen/json/public/live-emote.js';
 export type { LiveRoom } from './gen/json/public/live-room.js';
 export type { MemberEvent } from './gen/json/public/member-event.js';
 export type { ReconnectPolicy } from './gen/json/public/reconnect-policy.js';
@@ -38,6 +41,7 @@ export type UnknownEvent = GeneratedBaseEvent & {
 
 export type LiveEvent =
   | GeneratedChatEvent
+  | GeneratedEmoteChatEvent
   | GeneratedGiftEvent
   | GeneratedLikeEvent
   | GeneratedMemberEvent
