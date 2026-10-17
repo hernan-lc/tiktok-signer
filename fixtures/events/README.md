@@ -13,6 +13,7 @@ Consumed by `crates/ttl-live-events/tests/{golden,parity}.rs`.
 | `batch.pb` | Real capture — a full `ProtoMessageFetchResult`, **redacted** (see below) |
 | `chat.pb` | Real capture — the first `WebcastChatMessage` payload from that batch |
 | `gift.pb`, `like.pb`, `member.pb`, `social.pb`, `share.pb`, `social-unknown.pb`, `room-user.pb` | Synthesised from the v3 schema |
+| `chat-inline-emote.pb`, `chat-multiple-emotes.pb`, `chat-unicode-emote.pb`, `chat-invalid-emote.pb`, `emote-chat.pb` | Synthesised from the v3 schema — inline and standalone emote coverage (see `docs/20-live-emotes.md`) |
 | `social-classification.json` | The `action` → kind table shared by the Rust, TypeScript and Java tests |
 | `*-*.pb` (live-intro, room, gift-panel-update, …) | Real capture — events we do not normalise yet, kept to test the `Unknown` fallback |
 | `expected/*.json` | Normalised form, produced by **Node** |

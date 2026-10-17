@@ -128,4 +128,64 @@ class EventParserTest {
         assertEquals(json, event.raw)
         assertTrue(event.at > 0)
     }
+
+    @Test
+    fun chatCarriesItsInlineEmotes() {
+        val event =
+            EventParser.parse(
+                """{"type":"chat","comment":"Hello [laughcry]","user":{"unique_id":"ay"},
+                   "emotes":[{"id":"7098","imageUrl":"https://cdn/laughcry.webp","index":6,"emoteType":1,"packageId":"p1"}]}"""
+                    .trimIndent()
+                    .replace("\n", "")
+            )
+        assertEquals(LiveEvent.Category.CHAT, event.category)
+        assertEquals("Hello [laughcry]", event.text)
+        assertEquals(1, event.emotes.size)
+        val emote = event.emotes.single()
+        assertEquals("7098", emote.id)
+        assertEquals("https://cdn/laughcry.webp", emote.imageUrl)
+        assertEquals(6, emote.index)
+        assertEquals(1, emote.emoteType)
+        assertEquals("p1", emote.packageId)
+        assertEquals(null, emote.shortcode)
+        assertEquals(emptySet<String>(), event.shortcodes())
+    }
+
+    @Test
+    fun standaloneEmoteMessageBecomesItsOwnCategory() {
+        val event =
+            EventParser.parse(
+                """{"type":"emote_chat","user":{"unique_id":"ay"},
+                   "emotes":[{"id":"1"},{"id":"2"}]}"""
+                    .replace("\n", "")
+            )
+        assertEquals(LiveEvent.Category.EMOTE, event.category)
+        assertEquals(2, event.count)
+        assertEquals("no fabricated comment", "", event.text)
+        assertEquals(2, event.emotes.size)
+    }
+
+    @Test
+    fun malformedEmotesAreSkippedWithoutDroppingTheEvent() {
+        val event =
+            EventParser.parse(
+                """{"type":"chat","comment":"hi","user":{"unique_id":"ay"},
+                   "emotes":[{"index":3},{"id":"ok"},{"id":"","imageUrl":""}]}"""
+                    .replace("\n", "")
+            )
+        assertEquals(LiveEvent.Category.CHAT, event.category)
+        assertEquals("hi", event.text)
+        assertEquals(
+            "an emote with no id and no artwork is dropped",
+            1,
+            event.emotes.size,
+        )
+        assertEquals("ok", event.emotes.single().id)
+    }
+
+    @Test
+    fun anEventWithoutEmotesKeepsAnEmptyList() {
+        val event = EventParser.parse("""{"type":"chat","comment":"hi","user":{"unique_id":"ay"}}""")
+        assertEquals(emptyList<LiveEmote>(), event.emotes)
+    }
 }

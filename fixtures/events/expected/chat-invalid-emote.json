@@ -1,0 +1,16 @@
+{
+  "type": "chat",
+  "user": {
+    "id": "6820914516086834",
+    "nickname": "Golden Tester",
+    "unique_id": "golden.tester",
+    "sec_uid": "MS4wLjABAAAAgolden"
+  },
+  "comment": "Bad [emote]",
+  "emotes": [
+    {
+      "id": "7091",
+      "index": 4
+    }
+  ]
+}

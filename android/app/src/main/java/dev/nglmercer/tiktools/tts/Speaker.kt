@@ -8,8 +8,12 @@ import java.util.Locale
 
 /**
  * What the reader speaks for one event. Pure: chat reads the comment, gifts and follows announce
- * themselves, noisy categories (likes, room stats) stay silent by default. Empty string means "say
- * nothing".
+ * themselves, noisy categories (likes, room stats, emotes) stay silent by default. Empty string
+ * means "say nothing".
+ *
+ * A chat comment is sanitized **before** the empty-message check and before the sender's name is
+ * prepended, so a comment made only of emotes stays silent instead of announcing a bare name. Only
+ * the text handed to the engine is cleaned; the stored event keeps the original comment.
  *
  * Text is **not** truncated here: long messages are chunked sentence-aware by the Supertonic engine
  * and bounded by the explicit `maxSpeechChars` LIVE policy, so words are never silently cut.
@@ -21,17 +25,26 @@ object SpeechText {
         includeChatName: Boolean = true,
         chatPrefix: String = "",
         phrases: SpeechPhrases = SpeechPhrases.ENGLISH,
+        sanitizer: SanitizerSettings = SanitizerSettings(),
     ): String {
         val who = event.nickname.ifEmpty { event.user }.ifEmpty { phrases.someone }
         return when (event.category) {
-            LiveEvent.Category.CHAT ->
-                if (event.text.isBlank()) ""
-                else if (!includeChatName) event.text
-                else "$who ${chatPrefix.trim().ifEmpty { phrases.chatPrefix }}: ${event.text}"
+            LiveEvent.Category.CHAT -> {
+                val cleaned =
+                    TikTokSpeechSanitizer.sanitize(
+                        event.text,
+                        sanitizer,
+                        event.shortcodes(),
+                    )
+                if (cleaned.isBlank() && sanitizer.skipEmptyMessages) ""
+                else if (!includeChatName) cleaned
+                else "$who ${chatPrefix.trim().ifEmpty { phrases.chatPrefix }}: $cleaned"
+            }
             LiveEvent.Category.GIFT -> "$who ${phrases.sent} ${event.text.ifEmpty { phrases.gift }}"
             LiveEvent.Category.FOLLOW -> "$who ${phrases.followed}"
             LiveEvent.Category.SHARE -> "$who ${phrases.shared}"
             LiveEvent.Category.JOIN -> if (speakJoins) "$who ${phrases.joined}" else ""
+            LiveEvent.Category.EMOTE,
             LiveEvent.Category.LIKE,
             LiveEvent.Category.SOCIAL,
             LiveEvent.Category.MEMBER,

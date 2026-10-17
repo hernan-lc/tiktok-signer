@@ -36,15 +36,58 @@ fn user_json(user: &ttl_live_events::EventUser) -> Value {
     })
 }
 
+/// The public emote shape, as it crosses the JSON boundary. Keys are camelCase
+/// to match the Rust `Serialize` contract; optional fields are present only when
+/// the wire actually carried them.
+fn emotes_json(emotes: &[ttl_live_events::LiveEmote]) -> Value {
+    Value::Array(
+        emotes
+            .iter()
+            .map(|emote| {
+                let mut o = serde_json::Map::new();
+                o.insert("id".to_owned(), json!(emote.id));
+                if let Some(value) = &emote.shortcode {
+                    o.insert("shortcode".to_owned(), json!(value));
+                }
+                if let Some(value) = &emote.image_url {
+                    o.insert("imageUrl".to_owned(), json!(value));
+                }
+                if let Some(value) = emote.index {
+                    o.insert("index".to_owned(), json!(value));
+                }
+                if let Some(value) = emote.emote_type {
+                    o.insert("emoteType".to_owned(), json!(value));
+                }
+                if let Some(value) = &emote.package_id {
+                    o.insert("packageId".to_owned(), json!(value));
+                }
+                Value::Object(o)
+            })
+            .collect(),
+    )
+}
+
 /// The shared comparison format. Kept separate from the crate's `Serialize`
 /// impl on purpose: the public JSON shape is free to change, but this contract
 /// with the Node oracle must be explicit.
 fn golden_json(event: &LiveEvent) -> Value {
     match event {
-        LiveEvent::Chat(chat) => json!({
-            "type": "chat",
-            "user": user_json(&chat.user),
-            "comment": chat.comment,
+        LiveEvent::Chat(chat) => {
+            let mut value = json!({
+                "type": "chat",
+                "user": user_json(&chat.user),
+                "comment": chat.comment,
+            });
+            // Omitted when empty so the text-only `chat.pb` golden is unchanged.
+            if !chat.emotes.is_empty() {
+                value["emotes"] = emotes_json(&chat.emotes);
+            }
+            value
+        }
+        LiveEvent::EmoteChat(emote) => json!({
+            "type": "emote_chat",
+            "user": user_json(&emote.user),
+            "emotes": emotes_json(&emote.emotes),
         }),
         LiveEvent::Gift(gift) => json!({
             "type": "gift",
@@ -150,6 +193,31 @@ fn social_unknown_matches_node() {
 #[test]
 fn room_user_matches_node() {
     assert_matches_node("room-user.pb", method::ROOM_USER);
+}
+
+#[test]
+fn chat_inline_emote_matches_node() {
+    assert_matches_node("chat-inline-emote.pb", method::CHAT);
+}
+
+#[test]
+fn chat_multiple_emotes_matches_node() {
+    assert_matches_node("chat-multiple-emotes.pb", method::CHAT);
+}
+
+#[test]
+fn chat_unicode_emote_matches_node() {
+    assert_matches_node("chat-unicode-emote.pb", method::CHAT);
+}
+
+#[test]
+fn chat_invalid_emote_matches_node() {
+    assert_matches_node("chat-invalid-emote.pb", method::CHAT);
+}
+
+#[test]
+fn emote_chat_matches_node() {
+    assert_matches_node("emote-chat.pb", method::EMOTE_CHAT);
 }
 
 /// The real capture decodes end to end, and the events we do not model yet are

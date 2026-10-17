@@ -2,11 +2,97 @@ use serde::{Deserialize, Serialize};
 
 use crate::user::EventUser;
 
+/// Upper bound on the emotes carried by a single event. A chat comment can only
+/// hold so many; the cap stops a hostile or corrupt payload from turning one
+/// event into an unbounded allocation.
+pub const MAX_EMOTES_PER_EVENT: usize = 64;
+
+/// Upper bound on an emote identifier. Real ids are short; anything longer is
+/// malformed and is dropped rather than truncated into a colliding id.
+pub const MAX_EMOTE_ID_LENGTH: usize = 128;
+
+/// Upper bound on an emote artwork URL. Anything longer is discarded (the emote
+/// itself is kept) so a single field cannot balloon an event.
+pub const MAX_EMOTE_URL_LENGTH: usize = 2048;
+
+/// A graphical emote carried by a LIVE message, normalised from the generated
+/// `EmoteModel`/`EmoteWithIndex` types.
+///
+/// Every field except [`id`](Self::id) is optional because proto3 cannot
+/// distinguish an absent scalar from an explicit zero/empty value. A missing
+/// field is therefore *omitted* rather than reported as a confirmed default.
+///
+/// This is the wire-independent contract: it never exposes the generated Prost
+/// layout, and the public JSON uses camelCase (`imageUrl`, `emoteType`,
+/// `packageId`) so downstream renderers have one shape to read.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveEmote {
+    /// The original emote identifier exactly as it arrived.
+    pub id: String,
+
+    /// The textual shortcode (`[laughcry]`), when one is *reliably* known.
+    ///
+    /// The v3 schema carries no field that is verified to be the shortcode, so
+    /// this stays `None` today. A numeric or opaque id is deliberately not
+    /// reinterpreted as a display name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shortcode: Option<String>,
+
+    /// Artwork URL taken verbatim from the emote's `ImageModel`, validated as an
+    /// absolute `http(s)` URL. Absent when the message carried no usable image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<String>,
+
+    /// The raw `EmoteWithIndex.index`.
+    ///
+    /// Preserved without conversion: its unit (UTF-8 bytes, code points, UTF-16
+    /// units, ...) is **not** confirmed against real traffic, so text is never
+    /// sliced with it and the original comment is never rewritten.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<i32>,
+
+    /// The raw `EmoteModel.emote_type` enum value.
+    ///
+    /// `0` (`EMOTE_TYPE_NORMAL`) is indistinguishable from an absent field, so a
+    /// zero is omitted rather than asserted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emote_type: Option<i32>,
+
+    /// The original `EmoteModel.package_id` when non-empty (creator-specific or
+    /// custom emote packages).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_id: Option<String>,
+}
+
 /// A live comment.
+///
+/// `emotes` was added after the initial release; it defaults to an empty list
+/// and is omitted from the serialized form when empty, so text-only chat JSON is
+/// byte-for-byte unchanged. Rust source compatibility is affected only for code
+/// that builds `ChatEvent` with a struct literal, which must now add
+/// `..Default::default()` (or the `emotes` field).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatEvent {
     pub user: EventUser,
     pub comment: String,
+    /// Emotes embedded in the comment (`WebcastChatMessage.emotes`), in wire
+    /// order. Empty for a plain text comment.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub emotes: Vec<LiveEmote>,
+}
+
+/// A standalone emote message (`WebcastEmoteChatMessage`): one or more emotes
+/// with no accompanying text comment.
+///
+/// It is kept distinct from [`ChatEvent`] on purpose — inventing a `comment`
+/// from the emotes would corrupt the meaning of a text comment downstream.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EmoteChatEvent {
+    pub user: EventUser,
+    /// The `emote_list` block, in wire order. Standalone emotes carry no index.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub emotes: Vec<LiveEmote>,
 }
 
 /// A gift send. TikTok streams repeated gifts as a burst of messages sharing a
@@ -106,6 +192,8 @@ pub struct TopViewer {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum LiveEvent {
     Chat(ChatEvent),
+    /// A standalone `WebcastEmoteChatMessage`. Serialises as `type: "emote_chat"`.
+    EmoteChat(EmoteChatEvent),
     Gift(GiftEvent),
     Like(LikeEvent),
     Member(MemberEvent),
@@ -124,6 +212,7 @@ impl LiveEvent {
     pub fn method(&self) -> &str {
         match self {
             Self::Chat(_) => crate::method::CHAT,
+            Self::EmoteChat(_) => crate::method::EMOTE_CHAT,
             Self::Gift(_) => crate::method::GIFT,
             Self::Like(_) => crate::method::LIKE,
             Self::Member(_) => crate::method::MEMBER,
@@ -137,6 +226,7 @@ impl LiveEvent {
     pub fn user(&self) -> Option<&EventUser> {
         match self {
             Self::Chat(event) => Some(&event.user),
+            Self::EmoteChat(event) => Some(&event.user),
             Self::Gift(event) => Some(&event.user),
             Self::Like(event) => Some(&event.user),
             Self::Member(event) => Some(&event.user),

@@ -30,11 +30,17 @@ import { fileURLToPath } from 'node:url';
 import { fromBinary } from '@bufbuild/protobuf';
 import {
     WebcastChatMessageSchema,
+    WebcastEmoteChatMessageSchema,
     WebcastGiftMessageSchema,
     WebcastLikeMessageSchema,
     WebcastMemberMessageSchema,
     WebcastRoomUserSeqMessageSchema,
     WebcastSocialMessageSchema,
+} from '../../packages/tiktok-live/src/gen/webcast/model/message/messages_pb.js';
+import type { EmoteModel } from '../../packages/tiktok-live/src/gen/webcast/model/base/emoji_pb.js';
+import type {
+    WebcastChatMessage,
+    WebcastEmoteChatMessage,
 } from '../../packages/tiktok-live/src/gen/webcast/model/message/messages_pb.js';
 import type { User } from '../../packages/tiktok-live/src/gen/webcast/model/base/user_2_pb.js';
 
@@ -50,6 +56,59 @@ function normalizeUser(u: User | undefined) {
         unique_id: u?.displayId ?? '',
         sec_uid: u?.secUid ?? '',
     };
+}
+
+/**
+ * Mirrors `normalize::sanitize_image_url`: absolute http(s) only, no control
+ * characters or spaces, and bounded. Anything else is dropped while the emote
+ * itself is kept.
+ */
+function sanitizeImageUrl(url: string): string | undefined {
+    if (Buffer.byteLength(url, 'utf8') > 2048) return undefined;
+    for (const ch of url) {
+        const code = ch.codePointAt(0)!;
+        const control = code < 0x20 || (code >= 0x7f && code <= 0x9f);
+        if (control || ch === ' ') return undefined;
+    }
+    const rest = url.startsWith('https://') ? url.slice(8)
+        : url.startsWith('http://') ? url.slice(7)
+        : undefined;
+    if (rest === undefined || rest.length === 0 || rest.startsWith('/')) return undefined;
+    return url;
+}
+
+/**
+ * Mirrors `normalize::normalize_emote`. Optional fields are omitted, never sent
+ * as a "confirmed" default, and there is no shortcode: the v3 schema has no
+ * field verified to be the textual one.
+ */
+function normalizeEmote(emote: EmoteModel | undefined, index?: number) {
+    if (!emote) return undefined;
+    if (Buffer.byteLength(emote.emoteId, 'utf8') > 128) return undefined;
+    const imageUrl = emote.image?.urlList.map(sanitizeImageUrl).find((url) => url !== undefined);
+    if (emote.emoteId.length === 0 && imageUrl === undefined) return undefined;
+    const out: Record<string, unknown> = { id: emote.emoteId };
+    if (imageUrl !== undefined) out.imageUrl = imageUrl;
+    if (index !== undefined) out.index = index;
+    if (emote.emoteType !== 0) out.emoteType = emote.emoteType;
+    if (emote.packageId.length > 0) out.packageId = emote.packageId;
+    return out;
+}
+
+/** `WebcastChatMessage.emotes`, in wire order, capped like Rust does. */
+function inlineEmotes(m: Message<'webcast.model.message.WebcastChatMessage'>): unknown[] {
+    return m.emotes
+        .map((inline) => normalizeEmote(inline.emote, inline.index))
+        .filter((emote) => emote !== undefined)
+        .slice(0, 64);
+}
+
+/** Standalone `emote_list`; these carry no index. */
+function standaloneEmotes(m: Message<'webcast.model.message.WebcastEmoteChatMessage'>): unknown[] {
+    return m.emoteList
+        .map((emote) => normalizeEmote(emote, undefined))
+        .filter((emote) => emote !== undefined)
+        .slice(0, 64);
 }
 
 /** Protobuf counts are signed; the stable API clamps negatives, as Rust does. */
@@ -85,6 +144,47 @@ const normalizers: Record<string, (payload: Uint8Array) => unknown> = {
     'chat.pb': (payload) => {
         const m = fromBinary(WebcastChatMessageSchema, payload);
         return { type: 'chat', user: normalizeUser(m.user), comment: m.content };
+    },
+    'chat-inline-emote.pb': (payload) => {
+        const m = fromBinary(WebcastChatMessageSchema, payload);
+        return {
+            type: 'chat',
+            user: normalizeUser(m.user),
+            comment: m.content,
+            emotes: inlineEmotes(m),
+        };
+    },
+    'chat-multiple-emotes.pb': (payload) => {
+        const m = fromBinary(WebcastChatMessageSchema, payload);
+        return {
+            type: 'chat',
+            user: normalizeUser(m.user),
+            comment: m.content,
+            emotes: inlineEmotes(m),
+        };
+    },
+    'chat-unicode-emote.pb': (payload) => {
+        const m = fromBinary(WebcastChatMessageSchema, payload);
+        return {
+            type: 'chat',
+            user: normalizeUser(m.user),
+            comment: m.content,
+            emotes: inlineEmotes(m),
+        };
+    },
+    'chat-invalid-emote.pb': (payload) => {
+        const m = fromBinary(WebcastChatMessageSchema, payload);
+        // A malformed emote degrades per emote; the comment is never dropped.
+        return {
+            type: 'chat',
+            user: normalizeUser(m.user),
+            comment: m.content,
+            emotes: inlineEmotes(m),
+        };
+    },
+    'emote-chat.pb': (payload) => {
+        const m = fromBinary(WebcastEmoteChatMessageSchema, payload);
+        return { type: 'emote_chat', user: normalizeUser(m.user), emotes: standaloneEmotes(m) };
     },
     'gift.pb': (payload) => {
         const m = fromBinary(WebcastGiftMessageSchema, payload);

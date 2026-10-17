@@ -1,0 +1,17 @@
+{
+  "type": "chat",
+  "user": {
+    "id": "6820914516086834",
+    "nickname": "Golden Tester",
+    "unique_id": "golden.tester",
+    "sec_uid": "MS4wLjABAAAAgolden"
+  },
+  "comment": "こんにちは [laughcry]",
+  "emotes": [
+    {
+      "id": "7098",
+      "imageUrl": "https://p16-webcast.tiktokcdn.com/img/emote/laughcry.webp",
+      "index": 16
+    }
+  ]
+}

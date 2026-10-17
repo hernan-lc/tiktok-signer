@@ -1,6 +1,20 @@
 package dev.nglmercer.tiktools.core.model
 
+import org.json.JSONArray
 import org.json.JSONObject
+
+/**
+ * A normalized emote from the core's JSON. Mirrors the public Rust/TypeScript shape exactly;
+ * optional fields are `null` when the wire did not carry them rather than guessed.
+ */
+data class LiveEmote(
+    val id: String,
+    val shortcode: String? = null,
+    val imageUrl: String? = null,
+    val index: Int? = null,
+    val emoteType: Int? = null,
+    val packageId: String? = null,
+)
 
 /**
  * One normalized live event, parsed from the Rust core's JSON push (`{"type": …, …}`). Small and
@@ -29,9 +43,13 @@ data class LiveEvent(
     val at: Long = System.currentTimeMillis(),
     /** The original JSON, kept for actions templates and debugging. */
     val raw: String = "",
+    /** Structured emotes carried by this event; empty for most events. */
+    val emotes: List<LiveEmote> = emptyList(),
 ) {
     enum class Category {
         CHAT,
+        /** A standalone `WebcastEmoteChatMessage`: emotes with no accompanying text. */
+        EMOTE,
         GIFT,
         LIKE,
         FOLLOW,
@@ -43,6 +61,13 @@ data class LiveEvent(
         ROOM,
         UNKNOWN,
     }
+
+    /**
+     * Shortcodes confirmed by this event's own metadata. Always empty today (the schema has no
+     * verified shortcode field), but the sanitizer prefers them over the provisional catalog when a
+     * future build populates them.
+     */
+    fun shortcodes(): Set<String> = emotes.mapNotNull { it.shortcode }.toSet()
 }
 
 /**
@@ -76,6 +101,7 @@ object EventParser {
         val userObj = value.optJSONObject("user")
         val user = userObj?.optString("unique_id", "").orEmpty()
         val nickname = userObj?.optString("nickname", "").orEmpty()
+        val emotes = parseEmotes(value.optJSONArray("emotes"))
         val base =
             LiveEvent(
                 category = LiveEvent.Category.UNKNOWN,
@@ -90,12 +116,20 @@ object EventParser {
                 giftImageUrl = value.optString("gift_image_url", ""),
                 at = at,
                 raw = json,
+                emotes = emotes,
             )
         return when (type) {
             "chat" ->
                 base.copy(
                     category = LiveEvent.Category.CHAT,
                     text = value.optString("comment", "").take(500),
+                )
+            // A standalone emote message has no text comment; the emote count is
+            // the only thing the reader can show, and speech stays silent for it.
+            "emote_chat" ->
+                base.copy(
+                    category = LiveEvent.Category.EMOTE,
+                    count = emotes.size.toLong(),
                 )
             "gift" ->
                 base.copy(
@@ -140,5 +174,32 @@ object EventParser {
                     count = value.optLong("bytes", -1),
                 )
         }
+    }
+
+    /**
+     * Parse the normalized `emotes` array. Tolerant by construction: a malformed entry is skipped,
+     * and an emote with neither an id nor artwork (nothing to show) is dropped, matching the Rust
+     * and TypeScript decoders.
+     */
+    private fun parseEmotes(array: JSONArray?): List<LiveEmote> {
+        if (array == null || array.length() == 0) return emptyList()
+        val emotes = ArrayList<LiveEmote>(array.length())
+        for (index in 0 until array.length()) {
+            val entry = array.optJSONObject(index) ?: continue
+            val id = entry.optString("id", "")
+            val imageUrl = entry.optString("imageUrl", "")
+            if (id.isEmpty() && imageUrl.isEmpty()) continue
+            emotes.add(
+                LiveEmote(
+                    id = id,
+                    shortcode = entry.optString("shortcode", "").ifEmpty { null },
+                    imageUrl = imageUrl.ifEmpty { null },
+                    index = if (entry.has("index")) entry.optInt("index") else null,
+                    emoteType = if (entry.has("emoteType")) entry.optInt("emoteType") else null,
+                    packageId = entry.optString("packageId", "").ifEmpty { null },
+                )
+            )
+        }
+        return emotes
     }
 }

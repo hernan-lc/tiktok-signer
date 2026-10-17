@@ -33,8 +33,9 @@ mod user;
 
 pub use dynamic::{decode_webcast_message, SchemaField, SchemaMessage, SchemaObject, SchemaValue};
 pub use event::{
-    ChatEvent, DecodedEvent, EventBatch, EventEnvelope, EventSupport, GiftEvent, JsonMode,
-    LikeEvent, LiveEvent, MemberEvent, RawEvent, RoomUserEvent, SocialEvent, TopViewer,
+    ChatEvent, DecodedEvent, EmoteChatEvent, EventBatch, EventEnvelope, EventSupport, GiftEvent,
+    JsonMode, LikeEvent, LiveEmote, LiveEvent, MemberEvent, RawEvent, RoomUserEvent, SocialEvent,
+    TopViewer, MAX_EMOTES_PER_EVENT, MAX_EMOTE_ID_LENGTH, MAX_EMOTE_URL_LENGTH,
 };
 pub use social::{SocialClassification, SocialConfidence, SocialEvidence, SocialKind};
 pub use user::EventUser;
@@ -45,6 +46,7 @@ use ttl_live_proto::BaseProtoMessage;
 /// Schema method names for the events this crate normalises.
 pub mod method {
     pub const CHAT: &str = "WebcastChatMessage";
+    pub const EMOTE_CHAT: &str = "WebcastEmoteChatMessage";
     pub const GIFT: &str = "WebcastGiftMessage";
     pub const LIKE: &str = "WebcastLikeMessage";
     pub const MEMBER: &str = "WebcastMemberMessage";
@@ -235,6 +237,7 @@ fn normalize_payload(
 ) -> Result<Option<LiveEvent>, prost::DecodeError> {
     match method {
         method::CHAT => normalize::chat(payload).map(Some),
+        method::EMOTE_CHAT => normalize::emote_chat(payload).map(Some),
         method::GIFT => normalize::gift(payload).map(Some),
         method::LIKE => normalize::like(payload).map(Some),
         method::MEMBER => normalize::member(payload).map(Some),
@@ -301,6 +304,7 @@ fn decode_envelope_budget(
     } else {
         match method {
             method::CHAT => normalize::chat(payload),
+            method::EMOTE_CHAT => normalize::emote_chat(payload),
             method::GIFT => normalize::gift(payload),
             method::LIKE => normalize::like(payload),
             method::MEMBER => normalize::member(payload),

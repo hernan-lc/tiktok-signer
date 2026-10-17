@@ -1,0 +1,22 @@
+{
+  "type": "chat",
+  "user": {
+    "id": "6820914516086834",
+    "nickname": "Golden Tester",
+    "unique_id": "golden.tester",
+    "sec_uid": "MS4wLjABAAAAgolden"
+  },
+  "comment": "Hola [happy] amigo [wow]",
+  "emotes": [
+    {
+      "id": "7099",
+      "imageUrl": "https://p16-webcast.tiktokcdn.com/img/emote/happy.webp",
+      "index": 5
+    },
+    {
+      "id": "7100",
+      "imageUrl": "https://p16-webcast.tiktokcdn.com/img/emote/wow.webp",
+      "index": 19
+    }
+  ]
+}

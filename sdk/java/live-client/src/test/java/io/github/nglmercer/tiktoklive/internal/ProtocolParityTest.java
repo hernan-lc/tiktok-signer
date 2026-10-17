@@ -3,6 +3,7 @@ package io.github.nglmercer.tiktoklive.internal;
 import static org.junit.jupiter.api.Assertions.*;
 
 import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.google.protobuf.ByteString;
 
 import io.github.nglmercer.tiktoklive.*;
@@ -103,13 +104,42 @@ class ProtocolParityTest {
         assertThrows(IOException.class, () -> Protocol.decode(new byte[] {(byte) 255}));
     }
 
+    /** The public JSON `type` tag, which is snake_case in the Rust contract. */
+    static String wireType(String type) {
+        return switch (type) {
+            case "roomUser" -> "room_user";
+            case "emoteChat" -> "emote_chat";
+            default -> type;
+        };
+    }
+
+    /** Emote JSON, camelCase to match the Rust `LiveEmote` serialization. */
+    static ArrayNode emotesJson(List<LiveEmote> emotes) {
+        var array = JSON.createArrayNode();
+        for (var emote : emotes) {
+            var o = JSON.createObjectNode();
+            o.put("id", emote.id());
+            if (emote.imageUrl() != null) o.put("imageUrl", emote.imageUrl());
+            if (emote.index() != null) o.put("index", emote.index());
+            if (emote.emoteType() != null) o.put("emoteType", emote.emoteType());
+            if (emote.packageId() != null) o.put("packageId", emote.packageId());
+            array.add(o);
+        }
+        return array;
+    }
+
     JsonNode golden(LiveEvent event) {
         var o = JSON.createObjectNode();
-        o.put("type", event.type().equals("roomUser") ? "room_user" : event.type());
+        o.put("type", wireType(event.type()));
         EventUser user = null;
         if (event instanceof ChatEvent e) {
             user = e.user();
             o.put("comment", e.comment());
+            if (!e.emotes().isEmpty()) o.set("emotes", emotesJson(e.emotes()));
+        }
+        if (event instanceof EmoteChatEvent e) {
+            user = e.user();
+            o.set("emotes", emotesJson(e.emotes()));
         }
         if (event instanceof GiftEvent e) {
             user = e.user();
@@ -161,7 +191,21 @@ class ProtocolParityTest {
 
     @Test
     void nodeAndRustGoldenEvents() throws Exception {
-        String[] files = {"chat", "gift", "like", "member", "social", "share", "social-unknown", "room-user"};
+        String[] files = {
+            "chat",
+            "gift",
+            "like",
+            "member",
+            "social",
+            "share",
+            "social-unknown",
+            "room-user",
+            "chat-inline-emote",
+            "chat-multiple-emotes",
+            "chat-unicode-emote",
+            "chat-invalid-emote",
+            "emote-chat"
+        };
         String[] methods = {
             "WebcastChatMessage",
             "WebcastGiftMessage",
@@ -170,7 +214,12 @@ class ProtocolParityTest {
             "WebcastSocialMessage",
             "WebcastSocialMessage",
             "WebcastSocialMessage",
-            "WebcastRoomUserSeqMessage"
+            "WebcastRoomUserSeqMessage",
+            "WebcastChatMessage",
+            "WebcastChatMessage",
+            "WebcastChatMessage",
+            "WebcastChatMessage",
+            "WebcastEmoteChatMessage"
         };
         for (int i = 0; i < files.length; i++) {
             var envelope =
