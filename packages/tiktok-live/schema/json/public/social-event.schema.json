@@ -12,7 +12,13 @@
         "user": { "$ref": "./event-user.schema.json" },
         "action": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "followCount": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
-        "shareCount": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+        "shareCount": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "shareType": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "shareTarget": { "type": "string" },
+        "shareDisplayStyle": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "followType": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "scene": { "type": "string" },
+        "targetUserId": { "type": "string", "pattern": "^[0-9]+$" }
       },
       "required": ["type", "user", "action", "followCount", "shareCount"],
       "additionalProperties": true,

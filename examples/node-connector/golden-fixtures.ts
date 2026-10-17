@@ -58,6 +58,28 @@ function count(value: bigint | number | undefined): string {
     return (n < 0n ? 0n : n).toString();
 }
 
+/**
+ * Mirrors `normalize::social` in Rust, including the auxiliary fields retained
+ * as classification evidence. `share.pb` and `social-unknown.pb` decode through
+ * the same shape; only their `action` differs.
+ */
+function socialFixture(payload: Uint8Array) {
+    const m = fromBinary(WebcastSocialMessageSchema, payload);
+    return {
+        type: 'social',
+        user: normalizeUser(m.user),
+        action: String(m.action),
+        follow_count: count(m.followCount),
+        share_count: count(m.shareCount),
+        share_type: count(m.shareType),
+        share_target: m.shareTarget,
+        share_display_style: count(m.shareDisplayStyle),
+        follow_type: String(m.followType),
+        scene: m.scene,
+        target_user_id: count(m.targetUserId),
+    };
+}
+
 /** Mirrors the Rust normalisers in `crates/ttl-live-events/src/normalize.rs`. */
 const normalizers: Record<string, (payload: Uint8Array) => unknown> = {
     'chat.pb': (payload) => {
@@ -96,16 +118,9 @@ const normalizers: Record<string, (payload: Uint8Array) => unknown> = {
             action: String(m.action),
         };
     },
-    'social.pb': (payload) => {
-        const m = fromBinary(WebcastSocialMessageSchema, payload);
-        return {
-            type: 'social',
-            user: normalizeUser(m.user),
-            action: String(m.action),
-            follow_count: count(m.followCount),
-            share_count: count(m.shareCount),
-        };
-    },
+    'social.pb': socialFixture,
+    'share.pb': socialFixture,
+    'social-unknown.pb': socialFixture,
     'room-user.pb': (payload) => {
         const m = fromBinary(WebcastRoomUserSeqMessageSchema, payload);
         return {

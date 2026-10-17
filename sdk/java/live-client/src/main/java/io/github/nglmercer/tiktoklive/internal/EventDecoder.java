@@ -87,7 +87,17 @@ public final class EventDecoder {
                             user(m.getUser()),
                             count(m.getAction()),
                             count(m.getFollowCount()),
-                            count(m.getShareCount()));
+                            count(m.getShareCount()),
+                            // Retained verbatim as classification evidence; see
+                            // SocialClassifier. Zero/empty means "absent or zero".
+                            count(m.getShareType()),
+                            m.getShareTarget(),
+                            count(m.getShareDisplayStyle()),
+                            count(m.getFollowType()),
+                            m.getScene(),
+                            // `target_user_id` is a snowflake id, so it crosses
+                            // the API boundary as a string like the other ids.
+                            Long.toString(m.getTargetUserId()));
                 }
                 case "WebcastRoomUserSeqMessage" -> {
                     var m = WebcastRoomUserSeqMessage.parseFrom(payload);

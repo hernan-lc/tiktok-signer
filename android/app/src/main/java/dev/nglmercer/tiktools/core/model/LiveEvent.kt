@@ -36,11 +36,27 @@ data class LiveEvent(
         LIKE,
         FOLLOW,
         SHARE,
+        /** A social message whose `action` we have no confirmed rule for. */
+        SOCIAL,
         JOIN,
         MEMBER,
         ROOM,
         UNKNOWN,
     }
+}
+
+/**
+ * Confirmed `WebcastSocialMessage.action` values.
+ *
+ * A follow and a share arrive on the same message type and are told apart by
+ * this field alone. `follow_count` and `share_count` are cumulative room totals
+ * — a share message still carries a non-zero `follow_count` — so classifying by
+ * "the first positive counter" labels every share a follow. That was the bug
+ * here; see `ttl_live_events::social` for the canonical table.
+ */
+object SocialAction {
+    const val FOLLOW = 1L
+    const val SHARE = 3L
 }
 
 /**
@@ -101,13 +117,20 @@ object EventParser {
                         count = value.optLong("action", -1),
                     )
                 }
+            // A follow and a share share one message type; `action` is the
+            // discriminator. The counters are cumulative room totals and must
+            // never decide the category — a share still carries the room's
+            // follower total, so the old "first positive counter" test turned
+            // every share into a follow.
             "social" ->
-                when {
-                    value.optLong("follow_count", 0) > 0 ->
-                        base.copy(category = LiveEvent.Category.FOLLOW)
-                    value.optLong("share_count", 0) > 0 ->
-                        base.copy(category = LiveEvent.Category.SHARE)
-                    else -> base.copy(category = LiveEvent.Category.MEMBER)
+                when (value.optLong("action", 0)) {
+                    SocialAction.FOLLOW -> base.copy(category = LiveEvent.Category.FOLLOW)
+                    SocialAction.SHARE -> base.copy(category = LiveEvent.Category.SHARE)
+                    else ->
+                        base.copy(
+                            category = LiveEvent.Category.SOCIAL,
+                            count = value.optLong("action", 0),
+                        )
                 }
             "room_user" ->
                 base.copy(category = LiveEvent.Category.ROOM, count = value.optLong("total", 0))

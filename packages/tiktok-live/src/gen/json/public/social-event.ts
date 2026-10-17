@@ -17,6 +17,12 @@ export type SocialEvent = {
   action: number;
   followCount: number;
   shareCount: number;
+  shareType?: number;
+  shareTarget?: string;
+  shareDisplayStyle?: number;
+  followType?: number;
+  scene?: string;
+  targetUserId?: string;
 };
 
 export const SocialEventSchema = {
@@ -102,6 +108,31 @@ export const SocialEventSchema = {
           "type": "integer",
           "minimum": 0,
           "maximum": 9007199254740991
+        },
+        "shareType": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "shareTarget": {
+          "type": "string"
+        },
+        "shareDisplayStyle": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "followType": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "scene": {
+          "type": "string"
+        },
+        "targetUserId": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
         }
       },
       "required": [

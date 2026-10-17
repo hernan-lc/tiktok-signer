@@ -120,12 +120,14 @@
     <string name="category_like">Me gusta</string>
     <string name="category_follow">Seguir</string>
     <string name="category_share">Compartir</string>
+    <string name="category_social">Social</string>
     <string name="category_join">Unirse</string>
     <string name="category_member">Miembro</string>
     <string name="category_room">Sala</string>
     <string name="category_unknown">Desconocido</string>
     <string name="event_gift_summary">%1$s ×%2$d · %3$d diamantes</string>
     <string name="event_member_summary">Acción de miembro %1$d</string>
+    <string name="event_social_summary">Acción social %1$d</string>
     <string name="event_shared">Compartió el LIVE</string>
     <string name="event_followed">Empezó a seguir</string>
     <string name="event_joined">Se unió</string>

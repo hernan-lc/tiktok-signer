@@ -136,6 +136,12 @@ class ProtocolParityTest {
             o.put("action", Long.toString(e.action()));
             o.put("follow_count", Long.toString(e.followCount()));
             o.put("share_count", Long.toString(e.shareCount()));
+            o.put("share_type", Long.toString(e.shareType()));
+            o.put("share_target", e.shareTarget());
+            o.put("share_display_style", Long.toString(e.shareDisplayStyle()));
+            o.put("follow_type", Long.toString(e.followType()));
+            o.put("scene", e.scene());
+            o.put("target_user_id", e.targetUserId());
         }
         if (event instanceof RoomUserEvent e) {
             o.put("total", Long.toString(e.viewers()));
@@ -155,12 +161,14 @@ class ProtocolParityTest {
 
     @Test
     void nodeAndRustGoldenEvents() throws Exception {
-        String[] files = {"chat", "gift", "like", "member", "social", "room-user"};
+        String[] files = {"chat", "gift", "like", "member", "social", "share", "social-unknown", "room-user"};
         String[] methods = {
             "WebcastChatMessage",
             "WebcastGiftMessage",
             "WebcastLikeMessage",
             "WebcastMemberMessage",
+            "WebcastSocialMessage",
+            "WebcastSocialMessage",
             "WebcastSocialMessage",
             "WebcastRoomUserSeqMessage"
         };
@@ -177,6 +185,23 @@ class ProtocolParityTest {
                     JSON.readTree(read("expected/" + files[i] + ".json")), golden(event), files[i]);
             assertEquals("9007199254740993", event.msgId());
             assertTrue(event.isHistory());
+        }
+    }
+
+    /**
+     * The {@code action} -> kind table is shared with Rust and TypeScript through
+     * one fixture, so a rule that drifts in any one implementation fails here.
+     */
+    @Test
+    void socialClassificationMatchesSharedGolden() throws Exception {
+        var fixture = JSON.readTree(read("social-classification.json"));
+        assertFalse(fixture.path("cases").isEmpty(), "fixture must contain cases");
+        for (var item : fixture.path("cases")) {
+            long action = item.path("action").asLong();
+            var classification = SocialClassifier.classify(action);
+            assertEquals(item.path("kind").asText(), classification.kind().wireName(), "kind for " + action);
+            assertEquals(item.path("confidence").asText(), classification.confidence(), "confidence for " + action);
+            assertEquals(action, classification.rawAction());
         }
     }
 

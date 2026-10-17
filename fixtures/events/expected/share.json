@@ -1,0 +1,18 @@
+{
+  "type": "social",
+  "user": {
+    "id": "6820914516086834",
+    "nickname": "Golden Tester",
+    "unique_id": "golden.tester",
+    "sec_uid": "MS4wLjABAAAAgolden"
+  },
+  "action": "3",
+  "follow_count": "9312",
+  "share_count": "5",
+  "share_type": "1",
+  "share_target": "https://example.invalid/live",
+  "share_display_style": "1",
+  "follow_type": "0",
+  "scene": "share_scene",
+  "target_user_id": "0"
+}

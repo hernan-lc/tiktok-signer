@@ -75,6 +75,12 @@ fn golden_json(event: &LiveEvent) -> Value {
             "action": social.action.to_string(),
             "follow_count": social.follow_count.to_string(),
             "share_count": social.share_count.to_string(),
+            "share_type": social.share_type.to_string(),
+            "share_target": social.share_target,
+            "share_display_style": social.share_display_style.to_string(),
+            "follow_type": social.follow_type.to_string(),
+            "scene": social.scene,
+            "target_user_id": social.target_user_id.to_string(),
         }),
         LiveEvent::RoomUser(room) => json!({
             "type": "room_user",
@@ -129,6 +135,16 @@ fn member_matches_node() {
 #[test]
 fn social_matches_node() {
     assert_matches_node("social.pb", method::SOCIAL);
+}
+
+#[test]
+fn share_matches_node() {
+    assert_matches_node("share.pb", method::SOCIAL);
+}
+
+#[test]
+fn social_unknown_matches_node() {
+    assert_matches_node("social-unknown.pb", method::SOCIAL);
 }
 
 #[test]

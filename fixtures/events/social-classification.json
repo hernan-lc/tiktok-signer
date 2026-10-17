@@ -1,0 +1,10 @@
+{
+  "cases": [
+    { "action": 1, "kind": "follow", "confidence": "confirmed" },
+    { "action": 3, "kind": "share", "confidence": "confirmed" },
+    { "action": 0, "kind": "unknown", "confidence": "unknown" },
+    { "action": 2, "kind": "other", "confidence": "unknown" },
+    { "action": 4, "kind": "other", "confidence": "unknown" },
+    { "action": 97, "kind": "other", "confidence": "unknown" }
+  ]
+}

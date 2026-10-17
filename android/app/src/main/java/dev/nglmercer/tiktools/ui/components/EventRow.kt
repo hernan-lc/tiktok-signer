@@ -26,6 +26,7 @@ fun LiveEvent.Category.icon(): ImageVector =
         LiveEvent.Category.LIKE -> Icons.Outlined.FavoriteBorder
         LiveEvent.Category.FOLLOW -> Icons.Outlined.PersonAddAlt
         LiveEvent.Category.SHARE -> Icons.Outlined.Share
+        LiveEvent.Category.SOCIAL -> Icons.Outlined.PeopleOutline
         LiveEvent.Category.JOIN,
         LiveEvent.Category.MEMBER -> Icons.Outlined.PeopleOutline
         LiveEvent.Category.ROOM -> Icons.Outlined.Visibility
@@ -47,6 +48,7 @@ fun LiveEvent.summary(): String =
             pluralStringResource(R.plurals.event_likes, count.toInt(), count)
         LiveEvent.Category.FOLLOW -> stringResource(R.string.event_followed)
         LiveEvent.Category.SHARE -> stringResource(R.string.event_shared)
+        LiveEvent.Category.SOCIAL -> stringResource(R.string.event_social_summary, count)
         LiveEvent.Category.JOIN -> stringResource(R.string.event_joined)
         LiveEvent.Category.MEMBER -> stringResource(R.string.event_member_summary, count)
         LiveEvent.Category.ROOM ->

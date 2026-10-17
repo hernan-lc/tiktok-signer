@@ -41,15 +41,29 @@ class EventParserTest {
     }
 
     @Test
-    fun socialSplitsIntoFollowAndShare() {
-        val follow =
-            EventParser.parse("""{"type":"social","follow_count":1,"user":{"unique_id":"ay"}}""")
-        assertEquals(LiveEvent.Category.FOLLOW, follow.category)
+    fun socialUsesActionNotCumulativeCounters() {
+        // A real share still carries the room's cumulative follower total, so
+        // the old "first positive counter" rule labelled it a follow.
         val share =
-            EventParser.parse("""{"type":"social","share_count":2,"user":{"unique_id":"ay"}}""")
+            EventParser.parse(
+                """{"type":"social","action":3,"follow_count":9312,"share_count":5,"user":{"unique_id":"ay"}}"""
+            )
         assertEquals(LiveEvent.Category.SHARE, share.category)
+        val follow =
+            EventParser.parse(
+                """{"type":"social","action":1,"follow_count":9312,"share_count":5,"user":{"unique_id":"ay"}}"""
+            )
+        assertEquals(LiveEvent.Category.FOLLOW, follow.category)
+        // An unconfirmed action stays generic social, never a forged follow/share.
+        val unknown =
+            EventParser.parse(
+                """{"type":"social","action":97,"follow_count":9312,"user":{"unique_id":"ay"}}"""
+            )
+        assertEquals(LiveEvent.Category.SOCIAL, unknown.category)
+        assertEquals(97, unknown.count)
+        // A missing action (proto3 default 0) is unknown, not a follow.
         val bare = EventParser.parse("""{"type":"social","user":{"unique_id":"ay"}}""")
-        assertEquals(LiveEvent.Category.MEMBER, bare.category)
+        assertEquals(LiveEvent.Category.SOCIAL, bare.category)
     }
 
     @Test

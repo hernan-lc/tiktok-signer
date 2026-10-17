@@ -12,14 +12,29 @@ Consumed by `crates/ttl-live-events/tests/{golden,parity}.rs`.
 | --- | --- |
 | `batch.pb` | Real capture — a full `ProtoMessageFetchResult`, **redacted** (see below) |
 | `chat.pb` | Real capture — the first `WebcastChatMessage` payload from that batch |
-| `gift.pb`, `like.pb`, `member.pb`, `social.pb`, `room-user.pb` | Synthesised from the v3 schema |
+| `gift.pb`, `like.pb`, `member.pb`, `social.pb`, `share.pb`, `social-unknown.pb`, `room-user.pb` | Synthesised from the v3 schema |
+| `social-classification.json` | The `action` → kind table shared by the Rust, TypeScript and Java tests |
 | `*-*.pb` (live-intro, room, gift-panel-update, …) | Real capture — events we do not normalise yet, kept to test the `Unknown` fallback |
 | `expected/*.json` | Normalised form, produced by **Node** |
 
-The five synthesised fixtures exist because the captured batch is the initial
-HTTP response, which in practice only contains chat; gift, like, member, social
-and room-user arrive later over the WebSocket. They are encoded from the same
-schema and so use the same field numbers real traffic does.
+The synthesised fixtures exist because the captured batch is the initial HTTP
+response, which in practice only contains chat; the rest arrive later over the
+WebSocket. They are encoded from the same schema and so use the same field
+numbers real traffic does.
+
+Three social fixtures cover the classification surface:
+
+* `social.pb` — a confirmed **follow** (`action == 1`).
+* `share.pb` — a confirmed **share** (`action == 3`) that also carries the room's
+  cumulative `follow_count`. This is the regression fixture: any rule that picks
+  "the first positive counter" labels it a follow.
+* `social-unknown.pb` — an unobserved `action` (`97`), which must stay
+  unclassified rather than being counted as a follow or a share.
+
+The `action` → kind table itself (`1` follow, `3` share, `0` unknown, anything
+else other) has no confirmed meaning beyond those two values. TikTok adds codes
+without notice, so a new value must be observed in anonymised captures before a
+rule is added; until then it is reported with its raw code.
 
 ## Redaction
 

@@ -48,14 +48,23 @@ class EventFormatTest {
     }
 
     @Test
-    fun socialFollowAndShare() {
-        assertEquals(
-            "@ay followed",
-            EventFormat.line("""{"type":"social","follow_count":1,"user":{"unique_id":"ay"}}"""),
-        )
+    fun socialUsesActionNotCounters() {
+        // `action` decides; the counters are cumulative and misleading.
         assertEquals(
             "@ay shared",
-            EventFormat.line("""{"type":"social","share_count":2,"user":{"unique_id":"ay"}}"""),
+            EventFormat.line(
+                """{"type":"social","action":3,"follow_count":9312,"user":{"unique_id":"ay"}}"""
+            ),
+        )
+        assertEquals(
+            "@ay followed",
+            EventFormat.line(
+                """{"type":"social","action":1,"follow_count":9312,"user":{"unique_id":"ay"}}"""
+            ),
+        )
+        assertEquals(
+            "@ay social event (action=97)",
+            EventFormat.line("""{"type":"social","action":97,"user":{"unique_id":"ay"}}"""),
         )
     }
 

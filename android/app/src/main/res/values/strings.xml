@@ -132,12 +132,14 @@
     <string name="category_like">Like</string>
     <string name="category_follow">Follow</string>
     <string name="category_share">Share</string>
+    <string name="category_social">Social</string>
     <string name="category_join">Join</string>
     <string name="category_member">Member</string>
     <string name="category_room">Room</string>
     <string name="category_unknown">Unknown</string>
     <string name="event_gift_summary">%1$s ×%2$d · %3$d diamonds</string>
     <string name="event_member_summary">Member action %1$d</string>
+    <string name="event_social_summary">Social action %1$d</string>
     <string name="event_shared">Shared the LIVE</string>
     <string name="event_followed">Followed</string>
     <string name="event_joined">Joined</string>

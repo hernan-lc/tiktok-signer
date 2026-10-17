@@ -8,5 +8,11 @@
   },
   "action": "1",
   "follow_count": "9312",
-  "share_count": "4"
+  "share_count": "4",
+  "share_type": "0",
+  "share_target": "",
+  "share_display_style": "0",
+  "follow_type": "2",
+  "scene": "",
+  "target_user_id": "6820914516086834"
 }

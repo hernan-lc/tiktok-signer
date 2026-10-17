@@ -28,6 +28,7 @@
 pub mod dynamic;
 mod event;
 mod normalize;
+pub mod social;
 mod user;
 
 pub use dynamic::{decode_webcast_message, SchemaField, SchemaMessage, SchemaObject, SchemaValue};
@@ -35,6 +36,7 @@ pub use event::{
     ChatEvent, DecodedEvent, EventBatch, EventEnvelope, EventSupport, GiftEvent, JsonMode,
     LikeEvent, LiveEvent, MemberEvent, RawEvent, RoomUserEvent, SocialEvent, TopViewer,
 };
+pub use social::{SocialClassification, SocialConfidence, SocialEvidence, SocialKind};
 pub use user::EventUser;
 
 use event::RawEvent as Raw;

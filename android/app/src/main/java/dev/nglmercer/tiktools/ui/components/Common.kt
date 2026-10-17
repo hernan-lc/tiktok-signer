@@ -54,6 +54,7 @@ fun LiveEvent.Category.localizedName(): String =
             LiveEvent.Category.LIKE -> R.string.category_like
             LiveEvent.Category.FOLLOW -> R.string.category_follow
             LiveEvent.Category.SHARE -> R.string.category_share
+            LiveEvent.Category.SOCIAL -> R.string.category_social
             LiveEvent.Category.JOIN -> R.string.category_join
             LiveEvent.Category.MEMBER -> R.string.category_member
             LiveEvent.Category.ROOM -> R.string.category_room

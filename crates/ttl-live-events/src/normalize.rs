@@ -74,6 +74,13 @@ pub(crate) fn social(payload: &[u8]) -> Result<LiveEvent, prost::DecodeError> {
         action: message.action,
         follow_count: count(message.follow_count),
         share_count: count(message.share_count),
+        // Retained verbatim as classification evidence; see `crate::social`.
+        share_type: message.share_type,
+        share_target: message.share_target,
+        share_display_style: message.share_display_style,
+        follow_type: message.follow_type,
+        scene: message.scene,
+        target_user_id: count(message.target_user_id),
     }))
 }
 

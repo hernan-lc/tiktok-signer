@@ -44,6 +44,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("like.pb", like().encode_to_vec()),
         ("member.pb", member().encode_to_vec()),
         ("social.pb", social().encode_to_vec()),
+        ("share.pb", share().encode_to_vec()),
+        ("social-unknown.pb", social_unknown().encode_to_vec()),
         ("room-user.pb", room_user().encode_to_vec()),
     ];
 
@@ -129,11 +131,47 @@ fn member() -> WebcastMemberMessage {
     }
 }
 
+/// A confirmed follow (`action == 1`) that also carries the room's cumulative
+/// `follow_count`/`share_count` and a couple of the auxiliary social fields, so
+/// the golden comparison pins both the discriminator and the retained evidence.
 fn social() -> WebcastSocialMessage {
     WebcastSocialMessage {
         action: 1,
         follow_count: 9312,
         share_count: 4,
+        follow_type: 2,
+        target_user_id: 6_820_914_516_086_834,
+        user: Some(user()),
+        ..Default::default()
+    }
+}
+
+/// A confirmed share (`action == 3`).
+///
+/// The `follow_count` is deliberately non-zero: it is a cumulative room total
+/// that TikTok keeps sending on share messages, and classifying by "the first
+/// positive counter" would label this a follow. The golden tests lock that in.
+fn share() -> WebcastSocialMessage {
+    WebcastSocialMessage {
+        action: 3,
+        follow_count: 9312,
+        share_count: 5,
+        share_type: 1,
+        share_target: "https://example.invalid/live".to_owned(),
+        share_display_style: 1,
+        scene: "share_scene".to_owned(),
+        user: Some(user()),
+        ..Default::default()
+    }
+}
+
+/// A social message with an `action` we have no confirmed rule for. It must
+/// stay unclassified (never counted as a follow or a share) while keeping its
+/// raw code.
+fn social_unknown() -> WebcastSocialMessage {
+    WebcastSocialMessage {
+        action: 97,
+        follow_count: 9312,
         user: Some(user()),
         ..Default::default()
     }

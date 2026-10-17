@@ -46,12 +46,35 @@ pub struct MemberEvent {
 }
 
 /// A follow or share.
+///
+/// `action` is the discriminator and the only field that decides between a
+/// follow and a share; see [`crate::social`] for the classification. The
+/// remaining fields are retained verbatim so nothing observed is thrown away:
+/// they are evidence for diagnosis and for future classification rules, but
+/// none of them changes the kind today.
+///
+/// These are proto3 scalars, so an absent field and an explicit `0`/empty value
+/// are indistinguishable on the wire. A zero here means "absent or zero", never
+/// "confirmed zero".
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SocialEvent {
     pub user: EventUser,
     pub action: i64,
     pub follow_count: u64,
     pub share_count: u64,
+    /// `WebcastSocialMessage.share_type` (field 3). Meaning unconfirmed.
+    pub share_type: i64,
+    /// `WebcastSocialMessage.share_target` (field 5), e.g. a share URL.
+    pub share_target: String,
+    /// `WebcastSocialMessage.share_display_style` (field 7). Meaning unconfirmed.
+    pub share_display_style: i64,
+    /// `WebcastSocialMessage.follow_type` (field 13). Meaning unconfirmed.
+    pub follow_type: i32,
+    /// `WebcastSocialMessage.scene` (field 15). Free-form tag; not interpreted.
+    pub scene: String,
+    /// `WebcastSocialMessage.target_user_id` (field 14), the follow target when
+    /// TikTok sends one. `0` when absent.
+    pub target_user_id: u64,
 }
 
 /// Periodic viewer-count update.

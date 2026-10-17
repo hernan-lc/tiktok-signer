@@ -30,11 +30,13 @@ object EventFormat {
             "member" ->
                 if (value.optLong("action", -1) == 1L) "@$at joined"
                 else "@$at member event (action=${value.optLong("action", -1)})"
+            // `action` alone decides follow vs share; the counters are
+            // cumulative room totals and would mislabel a share as a follow.
             "social" ->
-                when {
-                    value.optLong("follow_count", 0) > 0 -> "@$at followed"
-                    value.optLong("share_count", 0) > 0 -> "@$at shared"
-                    else -> "@$at social event"
+                when (value.optLong("action", 0)) {
+                    SocialAction.FOLLOW -> "@$at followed"
+                    SocialAction.SHARE -> "@$at shared"
+                    else -> "@$at social event (action=${value.optLong("action", 0)})"
                 }
             "room_user" ->
                 "viewers: ${value.optLong("total", 0)} " +

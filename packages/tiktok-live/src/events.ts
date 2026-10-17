@@ -117,7 +117,41 @@ function normalizeContributor(contributor: Contributor): TopViewer {
 }
 
 /// `WebcastSocialMessage.action`, which is how a follow and a share arrive on the same message.
+/// Only these two values have a confirmed meaning; see {@link classifySocialAction}.
 export const SOCIAL_ACTION = Object.freeze({ follow: 1, share: 3 });
+
+/// What a social message semantically is. Mirrors `ttl_live_events::social::SocialKind`.
+export type SocialKind = 'follow' | 'share' | 'other' | 'unknown';
+
+/// Evidence provenance, not a probability. Mirrors `ttl_live_events::social::SocialConfidence`.
+export type SocialConfidence = 'confirmed' | 'inferred' | 'unknown';
+
+export interface SocialClassification {
+  kind: SocialKind;
+  confidence: SocialConfidence;
+  /// The raw `action` value exactly as it arrived.
+  rawAction: number;
+}
+
+/**
+ * Classify a `WebcastSocialMessage.action` code. This is the same table as
+ * `classify_action` in `crates/ttl-live-events/src/social.rs`, pinned by
+ * `fixtures/events/social-classification.json`.
+ *
+ * Classification is driven by `action` alone. `followCount`/`shareCount` are
+ * cumulative room totals and are *not* evidence of a new interaction — a share
+ * message still carries a non-zero `followCount`, so deciding by "the first
+ * positive counter" mislabels every share as a follow.
+ *
+ * `0` is `unknown` rather than a guess: proto3 cannot distinguish an absent
+ * field from an explicit zero.
+ */
+export function classifySocialAction(action: number): SocialClassification {
+  if (action === SOCIAL_ACTION.follow) return { kind: 'follow', confidence: 'confirmed', rawAction: action };
+  if (action === SOCIAL_ACTION.share) return { kind: 'share', confidence: 'confirmed', rawAction: action };
+  if (action === 0) return { kind: 'unknown', confidence: 'unknown', rawAction: action };
+  return { kind: 'other', confidence: 'unknown', rawAction: action };
+}
 
 type NormalizedEvent =
   | Omit<ChatEvent, 'method'>
@@ -182,6 +216,14 @@ const NORMALIZE: Record<string, Normalizer> = {
       action: safeCount(message.action),
       followCount: safeCount(message.followCount),
       shareCount: safeCount(message.shareCount),
+      // Retained as classification evidence; see `classifySocialAction`. The
+      // three below are proto3 scalars, so `0`/`''` means "absent or zero".
+      shareType: safeCount(message.shareType),
+      shareTarget: message.shareTarget,
+      shareDisplayStyle: safeCount(message.shareDisplayStyle),
+      followType: safeCount(message.followType),
+      scene: message.scene,
+      targetUserId: asId(message.targetUserId),
     } satisfies Omit<SocialEvent, 'method'>;
   },
   [METHOD.roomUser]: (payload) => {

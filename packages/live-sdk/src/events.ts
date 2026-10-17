@@ -3,10 +3,16 @@ export {
   EVENT,
   METHOD,
   SOCIAL_ACTION,
+  classifySocialAction,
   decodeEvent,
   decodeUser,
   label,
   safeCount,
+} from '../../tiktok-live/src/events.js';
+export type {
+  SocialClassification,
+  SocialConfidence,
+  SocialKind,
 } from '../../tiktok-live/src/events.js';
 export type {
   ChatEvent,

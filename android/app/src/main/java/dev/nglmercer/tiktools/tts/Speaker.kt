@@ -30,6 +30,7 @@ object SpeechText {
             LiveEvent.Category.SHARE -> "$who ${phrases.shared}"
             LiveEvent.Category.JOIN -> if (speakJoins) "$who ${phrases.joined}" else ""
             LiveEvent.Category.LIKE,
+            LiveEvent.Category.SOCIAL,
             LiveEvent.Category.MEMBER,
             LiveEvent.Category.ROOM,
             LiveEvent.Category.UNKNOWN -> ""
