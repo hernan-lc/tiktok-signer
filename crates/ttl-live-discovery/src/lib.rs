@@ -112,17 +112,18 @@ pub enum Requirement {
 pub fn requirement(operation: DiscoveryOperation) -> Requirement {
     match operation {
         DiscoveryOperation::RoomLookup => Requirement::None,
-        // `LiveChannels` reads `/api/search/live/full/`, which is signed like any webcast call.
-        // The `/live` DOM is one source of this list, not the only one.
+        // These endpoints were independently verified to work without signing
+        // (2026-08-18). Keep the capability table aligned with actual HTTP calls.
         DiscoveryOperation::RoomInfo
         | DiscoveryOperation::GiftList
-        | DiscoveryOperation::LiveChannels => Requirement::Signature,
+        | DiscoveryOperation::LiveChannels => Requirement::None,
     }
 }
 
 /// Operations that need no signer at all.
 ///
-/// The rest are implemented too, but require a [`UrlSigner`]; see the crate documentation.
+/// All currently supported discovery operations are unsigned; the Requirement
+/// enum remains extensible if a future endpoint proves to require a signature.
 pub fn native_operations() -> Vec<DiscoveryOperation> {
     DiscoveryOperation::ALL
         .into_iter()
@@ -295,18 +296,18 @@ mod tests {
         );
         assert_eq!(
             requirement(DiscoveryOperation::RoomInfo),
-            Requirement::Signature
+            Requirement::None
         );
         assert_eq!(
             requirement(DiscoveryOperation::GiftList),
-            Requirement::Signature
+            Requirement::None
         );
         assert_eq!(
             requirement(DiscoveryOperation::LiveChannels),
-            Requirement::Signature
+            Requirement::None
         );
-        // Only the lookup needs no signer; the others are implemented but require one.
-        assert_eq!(native_operations(), vec![DiscoveryOperation::RoomLookup]);
+        // Every implemented discovery route is currently unsigned.
+        assert_eq!(native_operations(), DiscoveryOperation::ALL.to_vec());
     }
 
     /// Every operation must be reachable once signing works. A `Renderer` requirement would mean
@@ -322,6 +323,24 @@ mod tests {
                 "{operation:?} is marked renderer-bound; confirm no JSON endpoint serves it"
             );
         }
+    }
+
+    #[test]
+    fn live_search_auth_refusal_is_not_silent_empty() {
+        let error = interpret_live_search(
+            r#"{"status_code":2483,"status_msg":"Please login your account first","data":[]}"#,
+        )
+        .unwrap_err();
+        assert!(matches!(error, DiscoveryError::Refused(message)
+            if message.contains("2483") && message.contains("Please login")));
+    }
+
+    #[test]
+    fn live_search_zero_status_can_return_no_rooms() {
+        assert_eq!(
+            interpret_live_search(r#"{"status_code":0,"data":[]}"#).unwrap(),
+            Vec::<LiveRoom>::new()
+        );
     }
 
     #[test]
@@ -635,6 +654,19 @@ pub struct LiveRoom {
 pub fn interpret_live_search(body: &str) -> Result<Vec<LiveRoom>, DiscoveryError> {
     let value: serde_json::Value =
         serde_json::from_str(body).map_err(|error| DiscoveryError::Decode(error.to_string()))?;
+    // TikTok sometimes answers HTTP 200 with a login/rate-limit refusal in
+    // status_code. Do not turn that into an empty list of available rooms.
+    if let Some(status_code) = value.get("status_code").and_then(serde_json::Value::as_i64) {
+        if status_code != 0 {
+            let message = value
+                .get("status_msg")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("request refused");
+            return Err(DiscoveryError::Refused(format!(
+                "live search status_code={status_code}: {message}"
+            )));
+        }
+    }
     let items = value
         .get("data")
         .and_then(serde_json::Value::as_array)
@@ -696,7 +728,20 @@ impl DiscoveryClient {
     ///
     /// Results depend on the keyword, so this samples live rooms rather than enumerating them.
     pub async fn live_channels(&self, keyword: &str) -> Result<Vec<LiveRoom>, DiscoveryError> {
-        let body = self.read(&live_search_url(keyword, 0)).await?;
+        self.live_channels_page(keyword, 0).await
+    }
+
+    /// Browse one page of currently live rooms without automatically connecting.
+    ///
+    /// The caller controls pagination/rate limits and selects a creator explicitly.
+    /// An empty page is not proof that no one is broadcasting; the upstream search
+    /// may be incomplete. The returned rooms are ordered by viewer count.
+    pub async fn live_channels_page(
+        &self,
+        keyword: &str,
+        offset: usize,
+    ) -> Result<Vec<LiveRoom>, DiscoveryError> {
+        let body = self.read(&live_search_url(keyword, offset)).await?;
         let mut rooms = interpret_live_search(&body)?;
         rooms.sort_by_key(|room| std::cmp::Reverse(room.viewers));
         Ok(rooms)
