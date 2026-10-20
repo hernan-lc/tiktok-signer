@@ -152,6 +152,15 @@ a conservative retry delay. Unknown statuses, malformed JSON, missing live room
 IDs and network failures are errors, not offline. User-not-found code 10202 is
 non-retryable; other unexpected upstream codes remain unknown discovery errors.
 
+Run the pinned Gradle wrapper itself on JDK 21. A build failure containing only
+`27` is Gradle's bundled Kotlin DSL rejecting a Java 27 launcher, before SDK code
+runs. For example, on Arch-based Linux with OpenJDK 21 installed:
+
+```sh
+JAVA_HOME=/usr/lib/jvm/java-21-openjdk ./gradlew :examples:embedded-java:run --args='@creator'
+```
+
+The SDK test JVM and Gradle launcher are separate compatibility concerns.
 If initialization fails, verify JDK version and the complete runtime classpath.
 If download fails offline, provide a local file matching the pinned hash. If TikTok
 refuses anonymous bootstrap, provide a legitimate session or stop; reconnect loops
