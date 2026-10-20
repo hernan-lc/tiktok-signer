@@ -1,0 +1,42 @@
+name: Java embedded backend
+on:
+  pull_request:
+    paths: ['sdk/java/**', 'crates/ttl-sign-embedded/bootstrap.js', '.github/workflows/java-embedded.yml']
+  push:
+    branches: [main]
+    paths: ['sdk/java/**', 'crates/ttl-sign-embedded/bootstrap.js', '.github/workflows/java-embedded.yml']
+permissions:
+  contents: read
+jobs:
+  offline:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, ubuntu-24.04-arm]
+        java: ['17', '21', '25']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        id: buildjdk
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-java@v4
+        id: testjdk
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+      - name: Offline Java tests (no bundle or live network)
+        shell: bash
+        working-directory: sdk/java
+        env:
+          JAVA_HOME: ${{ steps.buildjdk.outputs.path }}
+          TEST_JAVA_HOME: ${{ steps.testjdk.outputs.path }}
+          TEST_JAVA_VERSION: ${{ matrix.java }}
+        run: |
+          if [ "$TEST_JAVA_VERSION" = 17 ]; then
+            ./gradlew :live-core:test :live-client:test :live-presence:test "-PjavaTestHome=$TEST_JAVA_HOME"
+          else
+            ./gradlew build "-PjavaTestHome=$TEST_JAVA_HOME"
+          fi

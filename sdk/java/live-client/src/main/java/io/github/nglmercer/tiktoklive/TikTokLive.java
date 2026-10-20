@@ -17,7 +17,10 @@ public final class TikTokLive implements AutoCloseable {
     private final String uniqueId;
     private final OkHttpClient http;
     private final boolean ownHttp, fetchGifts;
-    private final ConnectApi api;
+    private final ConnectionProvider provider;
+    private final boolean ownProvider;
+    private final HttpJsonClient json;
+    private CompletableFuture<ConnectResponse> acquisition;
     private final ReconnectPolicy policy;
     private final ScheduledExecutorService timers;
     private final ThreadPoolExecutor events;
@@ -26,7 +29,7 @@ public final class TikTokLive implements AutoCloseable {
             new ConcurrentHashMap<>();
     private final GiftStreakTracker streaks = new GiftStreakTracker();
     private Map<String, GiftCatalog.Gift> gifts = Map.of();
-    private ScheduledFuture<?> heartbeat, reconnect;
+    private ScheduledFuture<?> heartbeat, reconnect, entryDeadline;
     private CompletableFuture<LiveState> pending;
     private WebSocket socket;
     private volatile long generation;
@@ -55,8 +58,13 @@ public final class TikTokLive implements AutoCloseable {
                                 .followRedirects(false)
                                 .followSslRedirects(false)
                                 .build()
-                        : b.http;
-        api = new ConnectApi(http, b.url, b.key);
+                        : b.http.newBuilder()
+                                .followRedirects(false)
+                                .followSslRedirects(false)
+                                .build();
+        ownProvider = b.provider == null;
+        provider = ownProvider ? new BrokerConnectionProvider(http, b.url, b.key) : b.provider;
+        json = new HttpJsonClient(http);
         var timerExecutor = new ScheduledThreadPoolExecutor(1, daemon("tiktok-timers"));
         timerExecutor.setRemoveOnCancelPolicy(true);
         timers = timerExecutor;
@@ -119,44 +127,49 @@ public final class TikTokLive implements AutoCloseable {
     }
 
     private void request(long token) {
-        api.connect(uniqueId)
-                .whenComplete(
-                        (response, error) -> {
-                            synchronized (this) {
-                                if (!valid(token)) return;
-                                if (error != null) {
-                                    fail(token, unwrap(error));
-                                    return;
-                                }
-                                gifts = Map.of();
-                                streaks.clear();
-                                if (response.status() == ConnectionStatus.OFFLINE) {
-                                    active = false;
-                                    state =
-                                            new LiveState(
-                                                    uniqueId,
-                                                    response.roomId(),
-                                                    ConnectionStatus.OFFLINE,
-                                                    false);
-                                    complete(state, null);
-                                    emit("offline", state);
-                                    return;
-                                }
-                                var descriptor = response.connection();
-                                if (fetchGifts) {
-                                    GiftCatalog.load(api, response.roomId(), descriptor)
-                                            .whenComplete(
-                                                    (catalog, failure) -> {
-                                                        synchronized (this) {
-                                                            if (!valid(token)) return;
-                                                            if (failure == null) gifts = catalog;
-                                                            else emit("error", unwrap(failure));
-                                                            open(token, response);
-                                                        }
-                                                    });
-                                } else open(token, response);
-                            }
-                        });
+        try {
+            acquisition = provider.connect(uniqueId);
+        } catch (Exception failure) {
+            fail(token, failure);
+            return;
+        }
+        acquisition.whenComplete(
+                (response, error) -> {
+                    synchronized (this) {
+                        if (!valid(token)) return;
+                        if (error != null) {
+                            fail(token, unwrap(error));
+                            return;
+                        }
+                        gifts = Map.of();
+                        streaks.clear();
+                        if (response.status() == ConnectionStatus.OFFLINE) {
+                            active = false;
+                            state =
+                                    new LiveState(
+                                            uniqueId,
+                                            response.roomId(),
+                                            ConnectionStatus.OFFLINE,
+                                            false);
+                            complete(state, null);
+                            emit("offline", state);
+                            return;
+                        }
+                        var descriptor = response.connection();
+                        if (fetchGifts) {
+                            GiftCatalog.load(json, response.roomId(), descriptor)
+                                    .whenComplete(
+                                            (catalog, failure) -> {
+                                                synchronized (this) {
+                                                    if (!valid(token)) return;
+                                                    if (failure == null) gifts = catalog;
+                                                    else emit("error", unwrap(failure));
+                                                    open(token, response);
+                                                }
+                                            });
+                        } else open(token, response);
+                    }
+                });
     }
 
     private boolean valid(long token) {
@@ -195,11 +208,32 @@ public final class TikTokLive implements AutoCloseable {
                                                         uniqueId,
                                                         response.roomId(),
                                                         ConnectionStatus.LIVE,
-                                                        true);
-                                        retries = 0;
+                                                        !provider.requiresRoomConfirmation());
+                                        if (!provider.requiresRoomConfirmation()) retries = 0;
                                         startHeartbeat(token, ws, response.roomId(), 10000);
-                                        complete(state, null);
-                                        emit("connected", state);
+                                        if (provider.requiresRoomConfirmation()) {
+                                            entryDeadline =
+                                                    timers.schedule(
+                                                            () -> {
+                                                                synchronized (TikTokLive.this) {
+                                                                    if (valid(token)
+                                                                            && !state.connected())
+                                                                        fail(
+                                                                                token,
+                                                                                new SocketException(
+                                                                                        "No confirmed"
+                                                                                            + " room"
+                                                                                            + " response"
+                                                                                            + " within"
+                                                                                            + " 20 seconds"));
+                                                                }
+                                                            },
+                                                            20,
+                                                            TimeUnit.SECONDS);
+                                        } else {
+                                            complete(state, null);
+                                            emit("connected", state);
+                                        }
                                     }
                                 }
 
@@ -230,16 +264,14 @@ public final class TikTokLive implements AutoCloseable {
                                         if (valid(token)) {
                                             var e =
                                                     new SocketException(
-                                                            "WebSocket failed: "
-                                                                    + error.getMessage());
-                                            e.initCause(error);
+                                                            "WebSocket transport failed");
                                             fail(token, e);
                                         }
                                     }
                                 }
                             });
         } catch (Exception e) {
-            fail(token, new SocketException("Cannot open WebSocket: " + e.getMessage()));
+            fail(token, new SocketException("Cannot open WebSocket"));
         }
     }
 
@@ -253,7 +285,9 @@ public final class TikTokLive implements AutoCloseable {
             if (!frame.getPayloadType().equals("msg")) return;
             var batch = Protocol.batch(frame);
             // ACK runs before event normalization and before any application executor.
-            if (batch.getNeedAck() && !ws.send(ByteString.of(Protocol.ackForBatch(frame, batch.getInternalExt())))) {
+            if (batch.getNeedAck()
+                    && !ws.send(
+                            ByteString.of(Protocol.ackForBatch(frame, batch.getInternalExt())))) {
                 synchronized (this) {
                     if (valid(token)) fail(token, new SocketException("ACK could not be sent"));
                 }
@@ -261,6 +295,13 @@ public final class TikTokLive implements AutoCloseable {
             }
             synchronized (this) {
                 if (!valid(token)) return;
+                if (provider.requiresRoomConfirmation() && !state.connected()) {
+                    if (entryDeadline != null) entryDeadline.cancel(false);
+                    retries = 0;
+                    state = new LiveState(uniqueId, state.roomId(), ConnectionStatus.LIVE, true);
+                    complete(state, null);
+                    emit("connected", state);
+                }
                 if (batch.getHeartbeatDuration() > 0)
                     startHeartbeat(
                             token,
@@ -268,12 +309,18 @@ public final class TikTokLive implements AutoCloseable {
                             state.roomId(),
                             Math.max(1000, Math.min(60000, batch.getHeartbeatDuration())));
                 for (var message : batch.getMessagesList()) {
-                    LiveEvent event = EventDecoder.decode(message);
-                    if (event instanceof GiftEvent gift) event = GiftCatalog.enrich(gift, gifts);
-                    emit("event", event);
-                    emit(event.type(), event);
-                    if (event instanceof GiftEvent gift)
-                        streaks.accept(gift).ifPresent(finalGift -> emit("giftFinal", finalGift));
+                    try {
+                        LiveEvent event = EventDecoder.decode(message);
+                        if (event instanceof GiftEvent gift)
+                            event = GiftCatalog.enrich(gift, gifts);
+                        emit("event", event);
+                        emit(event.type(), event);
+                        if (event instanceof GiftEvent gift)
+                            streaks.accept(gift)
+                                    .ifPresent(finalGift -> emit("giftFinal", finalGift));
+                    } catch (Exception malformed) {
+                        emit("error", new ProtocolException("Cannot decode event"));
+                    }
                 }
             }
         } catch (Exception e) {
@@ -343,6 +390,10 @@ public final class TikTokLive implements AutoCloseable {
     }
 
     private void stopSocket() {
+        if (entryDeadline != null) {
+            entryDeadline.cancel(false);
+            entryDeadline = null;
+        }
         if (heartbeat != null) {
             heartbeat.cancel(false);
             heartbeat = null;
@@ -368,7 +419,8 @@ public final class TikTokLive implements AutoCloseable {
         droppedCallbacks.addAndGet(events.getQueue().size());
         events.getQueue().clear();
         stopSocket();
-        api.cancelPending();
+        if (acquisition != null) acquisition.cancel(false);
+        json.cancelPending();
         gifts = Map.of();
         streaks.clear();
         if (pending != null && !pending.isDone()) pending.cancel(false);
@@ -380,7 +432,8 @@ public final class TikTokLive implements AutoCloseable {
         if (closed) return;
         disconnect();
         closed = true;
-        api.close();
+        json.close();
+        if (ownProvider) provider.close();
         timers.shutdownNow();
         events.shutdownNow();
         listeners.clear();
@@ -414,7 +467,8 @@ public final class TikTokLive implements AutoCloseable {
                                         try {
                                             listener.accept(value);
                                         } catch (Throwable e) {
-                                            if (token == generation && !name.equals("error")) emit("error", e);
+                                            if (token == generation && !name.equals("error"))
+                                                emit("error", e);
                                         }
                                     };
                             try {
@@ -434,19 +488,28 @@ public final class TikTokLive implements AutoCloseable {
                 active = false;
                 ++generation;
                 stopSocket();
-                api.cancelPending();
+                if (acquisition != null) acquisition.cancel(false);
+                json.cancelPending();
                 gifts = Map.of();
                 streaks.clear();
                 if (pending != null && !pending.isDone()) pending.cancel(false);
                 state = new LiveState(uniqueId, state.roomId(), state.status(), false);
                 long stoppedGeneration = generation;
-                events.execute(() -> {
-                    if (closed || generation != stoppedGeneration) return;
-                    var failure = new IllegalStateException("Event delivery overloaded; connection stopped");
-                    for (var listener : listeners.getOrDefault("error", new CopyOnWriteArrayList<>())) {
-                        try { listener.accept(failure); } catch (Throwable ignored) { /* Terminal notification. */ }
-                    }
-                });
+                events.execute(
+                        () -> {
+                            if (closed || generation != stoppedGeneration) return;
+                            var failure =
+                                    new IllegalStateException(
+                                            "Event delivery overloaded; connection stopped");
+                            for (var listener :
+                                    listeners.getOrDefault("error", new CopyOnWriteArrayList<>())) {
+                                try {
+                                    listener.accept(failure);
+                                } catch (Throwable ignored) {
+                                    /* Terminal notification. */
+                                }
+                            }
+                        });
             }
         }
     }
@@ -512,12 +575,19 @@ public final class TikTokLive implements AutoCloseable {
         private String url = "http://127.0.0.1:8080", key;
         private OkHttpClient http;
         private Executor callback;
+        private ConnectionProvider provider;
         private boolean fetchGifts;
         private Duration timeout = Duration.ofSeconds(10);
         private ReconnectPolicy policy = ReconnectPolicy.DEFAULT;
 
         private Builder(String id) {
             this.id = UniqueId.normalize(id);
+        }
+
+        /** Injected providers remain caller-owned; close them after closing this client. */
+        public Builder connectionProvider(ConnectionProvider provider) {
+            this.provider = Objects.requireNonNull(provider);
+            return this;
         }
 
         public Builder apiUrl(String url) {

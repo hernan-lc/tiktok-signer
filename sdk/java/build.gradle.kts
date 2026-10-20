@@ -20,6 +20,7 @@ subprojects {
     }
     tasks.withType<Test>().configureEach {
         useJUnitPlatform()
+        providers.gradleProperty("javaTestHome").orNull?.let { executable = "$it/bin/java" }
         systemProperty("repositoryRoot", rootProject.projectDir.parentFile.parentFile.absolutePath)
     }
     if (name.startsWith("live-") && name != "live-proto") {

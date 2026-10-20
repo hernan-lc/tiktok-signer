@@ -12,7 +12,12 @@ path. That is now the only path; the WebView oracle has been removed.
 
 The [Java 17+ SDK](sdk/java/README.md) supports broker-backed LIVE event streaming and confirmed
 HTTP-only presence monitoring, with optional Rust JNI signing. Build and test it with
-`cd sdk/java && ./gradlew build`.
+`cd sdk/java && ./gradlew build` (JDK 21+ for the full build).
+
+An optional [Java 21+ embedded backend](sdk/java/docs/EMBEDDED_JAVA.md) adds direct
+in-process GraalJS signing on standard OpenJDK, with no Rust/JNI runtime or external
+broker. Existing broker integrations retain Java 17 support. See the
+[validation record](sdk/java/docs/EMBEDDED_JAVA_VALIDATION.md) for tested behavior and limitations.
 
 ## Native C/C++ API
 

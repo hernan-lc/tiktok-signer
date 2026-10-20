@@ -4,9 +4,21 @@ Java 17+ SDK for the existing `tiktok-signer` broker and direct TikTok LIVE prot
 The default client requires no Node, browser, Python, or JNI. Presence performs only HTTP lookup;
 it never connects to TikTok's LIVE WebSocket. Generated protobuf types are implementation details.
 
+## Standalone JVM backend
+
+The optional Java 21+ [embedded backend](docs/EMBEDDED_JAVA.md) performs discovery,
+guest bootstrap and GraalJS signing in-process on standard OpenJDK. It needs no
+Rust, JNI, Node, browser or broker. Inject an `EmbeddedJavaConnectionProvider` with
+`TikTokLive.builder("@creator").connectionProvider(provider).build()`; injected
+providers are caller-owned. Broker mode remains the default.
+
+Run `./gradlew :examples:embedded-java:run --args='@creator'` on a headless server.
+See [executed validation and limitations](docs/EMBEDDED_JAVA_VALIDATION.md) before deployment.
+For a Java 17 broker-only build, use `./gradlew :live-client:build :live-presence:build`.
+
 ## Build and installation
 
-From `sdk/java`, with a JDK 17 or newer:
+From `sdk/java`, with JDK 21+ for the full build (broker modules still target Java 17):
 
 ```sh
 ./gradlew build
