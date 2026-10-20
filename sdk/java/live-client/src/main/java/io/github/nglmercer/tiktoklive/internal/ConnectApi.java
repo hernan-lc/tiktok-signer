@@ -6,7 +6,6 @@ import io.github.nglmercer.tiktoklive.*;
 
 import okhttp3.*;
 
-import java.io.IOException;
 import java.net.URI;
 import java.util.Set;
 import java.util.concurrent.*;
@@ -16,11 +15,12 @@ public final class ConnectApi implements AutoCloseable {
     private final OkHttpClient http;
     private final HttpUrl base;
     private final String key;
-    private final Set<Call> pending = ConcurrentHashMap.newKeySet();
+    private final HttpJsonClient json;
     private volatile boolean closed;
 
     public ConnectApi(OkHttpClient http, String base, String key) {
         this.http = http;
+        this.json = new HttpJsonClient(http);
         this.base = HttpUrl.get(base);
         this.key = key;
         if (!this.base.username().isEmpty() || !this.base.password().isEmpty())
@@ -43,57 +43,17 @@ public final class ConnectApi implements AutoCloseable {
                                         "{\"uniqueId\":\"" + id + "\"}",
                                         MediaType.get("application/json")));
         if (key != null && !key.isEmpty()) builder.header("Authorization", "Bearer " + key);
-        return json(builder.build()).thenApply(body -> parse(body, id));
+        var source = json(builder.build());
+        var result = source.thenApply(body -> parse(body, id));
+        result.whenComplete(
+                (v, e) -> {
+                    if (result.isCancelled()) source.cancel(false);
+                });
+        return result;
     }
 
     public CompletableFuture<JsonNode> json(Request request) {
-        var result = new CompletableFuture<JsonNode>();
-        Call call = http.newCall(request);
-        synchronized (this) {
-            if (closed)
-                return CompletableFuture.failedFuture(new IllegalStateException("Client closed"));
-            pending.add(call);
-        }
-        result.whenComplete(
-                (v, e) -> {
-                    pending.remove(call);
-                    if (result.isCancelled()) call.cancel();
-                });
-        call.enqueue(
-                new Callback() {
-                    public void onFailure(Call call, IOException error) {
-                        var failure =
-                                new DiscoveryException(
-                                        "HTTP request failed: " + error.getMessage());
-                        failure.initCause(error);
-                        result.completeExceptionally(failure);
-                    }
-
-                    public void onResponse(Call call, Response response) {
-                        try (response) {
-                            JsonNode body;
-                            try {
-                                body =
-                                        JSON.readTree(
-                                                response.body() == null
-                                                        ? ""
-                                                        : response.body().string());
-                            } catch (Exception e) {
-                                if (!response.isSuccessful())
-                                    throw error(
-                                            response.code(), response.header("x-request-id"), null);
-                                throw new ProtocolException("Invalid JSON response");
-                            }
-                            if (!response.isSuccessful())
-                                throw error(response.code(), response.header("x-request-id"), body);
-                            if (body == null) throw new ProtocolException("Empty JSON response");
-                            result.complete(body);
-                        } catch (Exception e) {
-                            result.completeExceptionally(e);
-                        }
-                    }
-                });
-        return result;
+        return json.json(request);
     }
 
     public static ConnectResponse parse(JsonNode body, String id) {
@@ -155,45 +115,15 @@ public final class ConnectApi implements AutoCloseable {
     }
 
     public static TikTokLiveException error(int status, String requestId, JsonNode body) {
-        var e = body == null ? JSON.createObjectNode() : body.path("error");
-        String code = e.path("code").asText(status == 429 ? "RATE_LIMITED" : "INTERNAL_ERROR");
-        String message = e.path("message").asText("HTTP " + status);
-        boolean retry =
-                e.path("retryable").isBoolean()
-                        ? e.path("retryable").asBoolean()
-                        : status >= 500 || status == 429;
-        Long after =
-                e.path("retryAfterMs").isIntegralNumber()
-                                && e.path("retryAfterMs").canConvertToLong()
-                        ? Math.max(0, e.path("retryAfterMs").asLong())
-                        : null;
-        return switch (code) {
-            case "AUTHENTICATION_REQUIRED", "INVALID_API_KEY" ->
-                    new AuthenticationException(code, message, retry, after, status, requestId);
-            case "RATE_LIMITED" ->
-                    new RateLimitException(code, message, retry, after, status, requestId);
-            case "SIGNER_UNAVAILABLE", "SIGN_FAILED" ->
-                    new SignerUnavailableException(code, message, retry, after, status, requestId);
-            case "DISCOVERY_FAILED", "USER_NOT_FOUND", "TIKTOK_REFUSED" ->
-                    new DiscoveryException(code, message, retry, after, status, requestId);
-            default ->
-                    status == 401 || status == 403
-                            ? new AuthenticationException(
-                                    code, message, retry, after, status, requestId)
-                            : status == 429
-                                    ? new RateLimitException(
-                                            code, message, retry, after, status, requestId)
-                                    : new ApiException(
-                                            code, message, retry, after, status, requestId);
-        };
+        return HttpJsonClient.error(status, requestId, body);
     }
 
     public synchronized void cancelPending() {
-        for (Call c : pending) c.cancel();
+        json.cancelPending();
     }
 
     public synchronized void close() {
         closed = true;
-        cancelPending();
+        json.close();
     }
 }

@@ -13,7 +13,7 @@ public final class GiftCatalog {
     public record Gift(String name, long diamonds, String icon, boolean streakable) {}
 
     public static CompletableFuture<Map<String, Gift>> load(
-            ConnectApi api, String room, ConnectionDescriptor descriptor) {
+            HttpJsonClient api, String room, ConnectionDescriptor descriptor) {
         var url =
                 HttpUrl.get("https://webcast.tiktok.com/webcast/gift/list/")
                         .newBuilder()
