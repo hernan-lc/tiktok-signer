@@ -105,7 +105,9 @@ rate limits, offline-without-signing, cancellation, provider ownership, room-ent
 confirmation, and existing transport/decoder regressions.
 
 The committed workflow adds offline JDK 17/21/25 jobs on Linux x86_64, Windows,
-and Linux ARM64. Remote jobs are not claimed passed by this local record.
+and Linux ARM64. GitHub reports Actions disabled for this repository (`actions/permissions.enabled=false`),
+so no remote jobs started for PR #10. Windows and ARM64 remain unverified.
+Remote jobs are not claimed passed by this local record.
 No GraalVM JDK benchmark, multi-hour heap soak, module-path launch or shaded-JAR
 launch has been executed. Only the Linux Chrome/US-East/FHD signing preset is
 currently exposed. Anonymous search selection is a contributor tool, not part
