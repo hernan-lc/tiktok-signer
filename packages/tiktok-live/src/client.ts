@@ -12,6 +12,7 @@ import { EventDelivery, type DeliveryOptions, type DeliveryMetrics } from "./del
 
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
+import NodeWebSocket from 'ws';
 
 import { Discovery } from './discovery.js';
 import { EVENT, decodeEvent } from './events.js';
@@ -190,10 +191,9 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
       bundleSource: options.bundleSource,
       bundlePath: options.bundlePath,
       bundleUrl: options.bundleUrl,
-      // Injectable so a caller on an older Node, or one that prefers `ws`, can pass its own.
-      // The global needs to accept a `headers` option, because the cookie travels there.
+      // Use a header-capable Node transport by default; custom implementations must honor headers.
       WebSocketImpl:
-        options.WebSocketImpl ?? (globalThis.WebSocket as unknown as WebSocketConstructor | undefined),
+        options.WebSocketImpl ?? (NodeWebSocket as unknown as WebSocketConstructor),
       discovery: options.discovery ?? null,
     };
     this.discovery = this.#options.discovery ?? new Discovery({
@@ -366,13 +366,15 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
 
     const Impl = this.#options.WebSocketImpl;
     if (!Impl) {
-      throw new Error('no WebSocket implementation: use Node 22+, or pass `WebSocketImpl`');
+      throw new Error('no WebSocket implementation configured');
     }
 
     await new Promise<void>((resolve, reject) => {
       let settled = false;
       let opened = false;
       const socket = new Impl(url, {
+        maxPayload: 16 * 1024 * 1024,
+        perMessageDeflate: false,
         headers: {
           cookie: this.#options.cookie,
           'user-agent': this.#options.userAgent,

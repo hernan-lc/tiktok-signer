@@ -244,8 +244,8 @@ impl HeadlessBackend {
     ///
     /// This is the transport. Nothing is sent here: the URL *is* the product, and the client opens
     /// it. That is what the player does — with `wsDirect` on it builds the socket URL itself and
-    /// signs the query with `registerWsSigner`, rather than asking `/webcast/im/fetch/` for a
-    /// `push_server`.
+    /// signs it using its configured SDK profile, rather than asking `/webcast/im/fetch/`
+    /// for a `push_server`. Both measured WebSocket signing profiles are supported.
     ///
     /// The result is packed into TikTok's own `ProtoMessageFetchResult` shape because that is the
     /// contract every client of this server already speaks: `push_server` carries the host and path,
@@ -278,11 +278,13 @@ impl HeadlessBackend {
                 "the signer returned a socket URL with no query".into(),
             ));
         };
-        if !query.contains("X-Gnarly=") {
-            // Without the signature the handshake is refused, and a client cannot tell that from a
-            // dead room. Fail here, where the reason is still legible.
+        let signed_parameter = query
+            .split('&')
+            .filter_map(|pair| pair.split_once('='))
+            .any(|(key, value)| matches!(key, "X-Gnarly" | "X-Bogus") && !value.is_empty());
+        if !signed_parameter {
             return SignOutcome::Transport(SignError::BackendUnavailable(
-                "the signer returned no X-Gnarly; the socket product was not used".into(),
+                "the signer returned no nonempty X-Gnarly or X-Bogus WebSocket signature".into(),
             ));
         }
 
@@ -369,11 +371,9 @@ impl SignerBackend for HeadlessBackend {
     }
 }
 
-/// The signing product the transport requires.
-///
-/// Exposed so a caller configuring a [`UrlSigner`] cannot pick another by accident. The socket is signed by `registerWsSigner` over the query bytes; the patched-fetch
-/// suffix and `frontierSign` produce parameters this endpoint ignores, and the handshake is then
-/// refused with a bare 1006 that looks like a dead room.
+/// Default compatibility signing product. The current served player may use
+/// `frontierSign`/`X-Bogus`; callers can configure that product explicitly.
+/// Both profiles were verified against the same active room on 2026-10-25.
 pub const TRANSPORT_PRODUCT: SigningProduct = SigningProduct::WsDirect;
 
 /// The socket path every signed result points at.
@@ -411,6 +411,34 @@ mod tests {
     }
 
     struct FailingSigner;
+
+    struct SuffixSigner(&'static str);
+    impl UrlSigner for SuffixSigner {
+        fn sign<'a>(&'a self, url: &'a str) -> SignFuture<'a> {
+            Box::pin(async move { Ok(format!("{url}{}", self.0)) })
+        }
+    }
+
+    #[tokio::test]
+    async fn direct_transport_accepts_both_verified_signature_profiles_and_rejects_impostors() {
+        for (suffix, accepted) in [
+            ("&X-Gnarly=fixture", true),
+            ("&X-Bogus=fixture", true),
+            ("&X-Bogus=", false),
+            ("&other=X-Gnarly=fixture", false),
+            ("&not-X-Gnarly=fixture", false),
+        ] {
+            let backend = HeadlessBackend::new(
+                HeadlessConfig::new(preset(), CookieJar::parse("sessionid=fixture")),
+                Box::new(SuffixSigner(suffix)),
+            )
+            .unwrap();
+            let outcome = backend
+                .transport(TransportRequest::new("7300000000000000001"))
+                .await;
+            assert_eq!(matches!(outcome, SignOutcome::Ok(_)), accepted, "{suffix}");
+        }
+    }
 
     impl UrlSigner for FailingSigner {
         fn sign<'a>(&'a self, _url: &'a str) -> SignFuture<'a> {
@@ -507,8 +535,7 @@ mod tests {
         assert_eq!(backend.identity().user_agent, preset().user_agent());
     }
 
-    /// Pinning the product is the point: the socket ignores the parameters the other two products
-    /// add, and then refuses the handshake with a bare 1006 that reads like a dead room.
+    /// Preserve the existing default while allowing the verified FrontierSign profile.
     #[test]
     fn the_transport_route_uses_the_socket_signing_product() {
         assert_eq!(TRANSPORT_PRODUCT, SigningProduct::WsDirect);

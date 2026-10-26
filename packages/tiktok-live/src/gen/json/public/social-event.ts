@@ -132,7 +132,8 @@ export const SocialEventSchema = {
         },
         "targetUserId": {
           "type": "string",
-          "pattern": "^[0-9]+$"
+          "pattern": "^-?[0-9]+$",
+          "description": "Raw int64 target; negative wire sentinels are preserved."
         }
       },
       "required": [

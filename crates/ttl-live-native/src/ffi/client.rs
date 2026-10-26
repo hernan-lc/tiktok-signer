@@ -60,10 +60,30 @@ impl Delivery {
         }
     }
 }
-#[derive(Default)]
 struct Dispatch {
     capacity: usize,
+    queued_bytes: usize,
     sender: Option<tokio::sync::mpsc::Sender<Delivery>>,
+}
+const MAX_DELIVERY_BYTES: usize = 8 * 1024 * 1024;
+impl Default for Dispatch {
+    fn default() -> Self {
+        Self {
+            capacity: 32,
+            queued_bytes: 0,
+            sender: None,
+        }
+    }
+}
+impl Delivery {
+    fn estimated_bytes(&self) -> usize {
+        match self {
+            Self::Batch(batch) => batch.estimated_retained_bytes(),
+            Self::State(_, detail) | Self::Error(_, _, _, detail) => {
+                detail.capacity().saturating_add(128)
+            }
+        }
+    }
 }
 const DURATION_BUCKET_MICROS: [u64; 12] = [
     50, 100, 250, 500, 1000, 5000, 10000, 50000, 100000, 1000000, 5000000, 30000000,
@@ -195,20 +215,33 @@ impl Shared {
                 .fetch_add(delivery.event_count(), Ordering::Relaxed);
             return None;
         };
-        match sender.try_send(delivery) {
-            Ok(()) => (),
-            Err(error) => {
-                self.discarded
-                    .fetch_add(error.into_inner().event_count(), Ordering::Relaxed);
-                self.rejections.fetch_add(1, Ordering::Relaxed);
-                self.overloaded.store(true, Ordering::Release);
-                dispatch.sender.take();
-                if let Some(stop) = lock(&self.stop).as_ref() {
-                    stop.send_replace(true);
+        let cost = delivery.estimated_bytes();
+        let rejected = if cost > MAX_DELIVERY_BYTES.saturating_sub(dispatch.queued_bytes) {
+            Some(delivery)
+        } else {
+            match sender.try_send(delivery) {
+                Ok(()) => {
+                    dispatch.queued_bytes += cost;
+                    None
                 }
+                Err(error) => Some(error.into_inner()),
+            }
+        };
+        if let Some(delivery) = rejected {
+            self.discarded
+                .fetch_add(delivery.event_count(), Ordering::Relaxed);
+            self.rejections.fetch_add(1, Ordering::Relaxed);
+            self.overloaded.store(true, Ordering::Release);
+            dispatch.sender.take();
+            if let Some(stop) = lock(&self.stop).as_ref() {
+                stop.send_replace(true);
             }
         }
         None
+    }
+    fn release_delivery_bytes(&self, cost: usize) {
+        let mut dispatch = lock(&self.dispatch);
+        dispatch.queued_bytes = dispatch.queued_bytes.saturating_sub(cost);
     }
     fn error(&self, code: ResultCode, retryable: bool, status: i32, message: &str) {
         if let Some(Delivery::Error(code, retryable, status, message)) =
@@ -253,6 +286,7 @@ impl Shared {
             Error::Socket => (ResultCode::Socket, "LIVE socket failed"),
             Error::Timeout => (ResultCode::Timeout, "LIVE socket timed out"),
             Error::Decode => (ResultCode::Decode, "invalid LIVE batch"),
+            Error::Backpressure => (ResultCode::Protocol, "LIVE callback queue saturated"),
             Error::Protocol => (ResultCode::Protocol, "LIVE protocol failed"),
         };
         let status = match e {
@@ -334,11 +368,14 @@ impl LiveSink for Shared {
 fn dispatcher(shared: Arc<Shared>, mut incoming: tokio::sync::mpsc::Receiver<Delivery>) {
     lock(&shared.callbacks).dispatcher = Some(thread::current().id());
     while let Some(delivery) = incoming.blocking_recv() {
+        let cost = delivery.estimated_bytes();
         if shared.overloaded.load(Ordering::Acquire) || !lock(&shared.callbacks).enabled {
+            shared.release_delivery_bytes(cost);
             shared
                 .discarded
                 .fetch_add(delivery.event_count(), Ordering::Relaxed);
             while let Ok(delivery) = incoming.try_recv() {
+                shared.release_delivery_bytes(delivery.estimated_bytes());
                 shared
                     .discarded
                     .fetch_add(delivery.event_count(), Ordering::Relaxed);
@@ -352,6 +389,7 @@ fn dispatcher(shared: Arc<Shared>, mut incoming: tokio::sync::mpsc::Receiver<Del
                 shared.deliver_error(code, retryable, status, &message)
             }
         }
+        shared.release_delivery_bytes(cost);
     }
     if shared.overloaded.swap(false, Ordering::AcqRel) {
         shared.deliver_error(
@@ -1091,6 +1129,30 @@ mod tests {
             );
             assert_eq!(errors.load(Ordering::SeqCst), 1);
             assert!(lock(&shared.dispatch).sender.is_none());
+            ttl_live_client_destroy(client);
+        }
+    }
+
+    #[test]
+    fn default_dispatch_is_async_and_large_batch_metadata_triggers_overflow() {
+        unsafe {
+            let client = ttl_live_client_create(&options());
+            assert!(!client.is_null());
+            let shared = &(*client).shared;
+            assert_eq!(lock(&shared.dispatch).capacity, 32);
+            let (sender, mut incoming) = tokio::sync::mpsc::channel(32);
+            lock(&shared.dispatch).sender = Some(sender);
+            let (stop, rx) = watch::channel(false);
+            *lock(&shared.stop) = Some(stop);
+            shared.on_batch(ttl_live_events::EventBatch {
+                cursor: "x".repeat(MAX_DELIVERY_BYTES),
+                ..Default::default()
+            });
+            assert!(*rx.borrow());
+            assert!(shared.overloaded.load(Ordering::Acquire));
+            assert_eq!(shared.rejections.load(Ordering::Relaxed), 1);
+            assert_eq!(lock(&shared.dispatch).queued_bytes, 0);
+            assert!(incoming.try_recv().is_err());
             ttl_live_client_destroy(client);
         }
     }

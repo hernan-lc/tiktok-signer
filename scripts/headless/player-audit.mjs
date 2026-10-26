@@ -33,6 +33,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { chunkUrl, roomPageUrl, importedChunkIds, signingFacts } from './lib/player-assets.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..', '..');
@@ -83,13 +84,12 @@ if (!manifestUrl || !runtimeUrl) {
 const [manifest, runtime] = await Promise.all([get(manifestUrl), get(runtimeUrl)]);
 
 // The room route's own chunk. Named after the route rather than an id, which survives rebuilds.
-const roomAsset = [...manifest.matchAll(/"(static\/js\/async\/[^"]*\.live\/page\.[0-9a-f]+\.js)"/g)]
-  .map(([, asset]) => asset)[0];
-if (!roomAsset) {
-  console.error('no live room page asset in the route manifest');
+const roomUrl = roomPageUrl(assetBase, manifest, runtime);
+if (!roomUrl) {
+  console.error('no live room page asset resolved from the route manifest/runtime');
   process.exit(1);
 }
-const roomChunk = await get(`${assetBase}/${roomAsset}`);
+const roomChunk = await get(roomUrl);
 
 /// Take a `{`-delimited slice starting at `open`, counting braces so nested objects survive.
 function braceSlice(source, open) {
@@ -115,11 +115,10 @@ if (configAt < 0) {
   process.exit(1);
 }
 const around = roomChunk.slice(Math.max(0, configAt - 4000), configAt + 4000);
-const chunkIds = [...new Set([...around.matchAll(/\.e\("(\d+)"\)/g)].map(([, id]) => id))];
+const chunkIds = importedChunkIds(around);
 const imChunks = await Promise.all(chunkIds.map(async (id) => {
-  const hash = runtime.match(new RegExp(`"?${id}"?\\s*:\\s*"([0-9a-f]{6,})"`))?.[1];
-  if (!hash) return null;
-  return get(`${assetBase}/static/js/async/${id}.${hash}.js`).catch(() => null);
+  const url = chunkUrl(assetBase, runtime, id);
+  return url ? get(url).catch(() => null) : null;
 }));
 const imChunk = imChunks.find((source) => source && source.includes('ws_reuse_supplement'));
 if (!imChunk) {
@@ -153,14 +152,12 @@ const blockAt = imChunk.indexOf('{version_code:');
 const block = blockAt < 0 ? '' : braceSlice(imChunk, blockAt);
 facts.browser_block_keys = [...block.matchAll(/(?:^|[{,])(\w+):/g)].map(([, key]) => key);
 const versionVar = block.match(/version_code:(\w+)/)?.[1];
-facts.sdk_version_code = versionVar ? binding(imChunk, versionVar) : null;
+facts.sdk_version_code = block.match(/version_code:"([^"]+)"/)?.[1] ?? (versionVar ? binding(imChunk, versionVar) : null);
 const updateVar = imChunk.match(/updateVersionCode:(\w+)/)?.[1];
-facts.update_version_code = updateVar ? binding(imChunk, updateVar) : null;
+facts.update_version_code = imChunk.match(/updateVersionCode:"([^"]+)"/)?.[1] ?? (updateVar ? binding(imChunk, updateVar) : null);
 
 // The signature: which product signs the socket, and under which header names.
-facts.ws_signer = /registerWsSigner\(\)/.test(imChunk) ? 'registerWsSigner' : null;
-facts.ws_sign_input = imChunk.match(/\{"(X-MS-[A-Z]+)":\w+,"(X-MS-[A-Z]+)":""\}/)?.slice(1, 3) ?? [];
-facts.ws_sign_output = imChunk.match(/\["(X-[A-Za-z]+)"\]/)?.[1] ?? null;
+Object.assign(facts, signingFacts(imChunk));
 
 // The serializer. Ours reproduces its bytes, so an added `encodeURIComponent` here invalidates every
 // signature we compute — this is the single most consequential line in the audit.

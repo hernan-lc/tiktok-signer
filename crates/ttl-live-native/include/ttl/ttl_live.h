@@ -55,7 +55,9 @@ TTL_API ttl_result_t ttl_live_client_set_event_callback(ttl_live_client_t *clien
 TTL_API ttl_result_t ttl_live_client_set_batch_callback(ttl_live_client_t *client, ttl_batch_callback_t callback, void *userdata);
 TTL_API ttl_result_t ttl_live_client_set_state_callback(ttl_live_client_t *client, ttl_state_callback_t callback, void *userdata);
 TTL_API ttl_result_t ttl_live_client_set_error_callback(ttl_live_client_t *client, ttl_error_callback_t callback, void *userdata);
-/* Optional asynchronous callback mode; configure while disconnected.
+/* Callback delivery configuration; default is an ordered dispatcher, capacity 32.
+ * Asynchronous delivery also has an 8 MiB estimated retained-byte limit.
+ * Configure while disconnected.
  * capacity=0 preserves synchronous callbacks on the LIVE worker. 1..256 bounds
  * queued deliveries (batches/state/error notifications) on one dispatcher.
  * All callbacks for a client remain ordered on one thread. Overflow stops the

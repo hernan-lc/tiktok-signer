@@ -15,6 +15,7 @@ tokio = { workspace = true, features = ["rt"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
 [dev-dependencies]
+flate2.workspace = true
 prost.workspace = true
 futures-util = "0.3"
 tokio = { workspace = true, features = ["net", "io-util", "test-util"] }

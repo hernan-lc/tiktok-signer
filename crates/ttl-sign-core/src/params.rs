@@ -825,8 +825,15 @@ mod tests {
         // The player still builds the socket itself. If this flips, the direct path is gone and no
         // amount of query correctness will help.
         assert_eq!(facts["ws_direct"], serde_json::json!(true));
-        assert_eq!(facts["ws_signer"], serde_json::json!("registerWsSigner"));
-        assert_eq!(facts["ws_sign_output"], serde_json::json!("X-Gnarly"));
+        // Query/framing validation is independent of the two verified signing profiles.
+        // Unknown future profiles still fail explicitly rather than being ignored.
+        let (output, input) = match facts["ws_signer"].as_str() {
+            Some("registerWsSigner") => ("X-Gnarly", serde_json::json!(["X-MS-Q", "X-MS-STUB"])),
+            Some("frontierSign") => ("X-Bogus", serde_json::json!(["X-MS-PAYLOAD"])),
+            other => panic!("unverified player signing profile: {other:?}"),
+        };
+        assert_eq!(facts["ws_sign_output"], serde_json::json!(output));
+        assert_eq!(facts["ws_sign_input"], input);
         // Our query is signed as raw bytes. An encoding serializer invalidates every signature.
         assert_eq!(
             facts["serializer_percent_encodes"],

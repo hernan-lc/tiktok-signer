@@ -42,3 +42,6 @@ android/app/src/main/jniLibs/
 # Locally generated fuzz smoke corpora; committed regression fixtures live in fixtures/.
 /fuzz/corpus/
 /fuzz/artifacts/
+
+# Java IDE compiler output; keep generated classes/resources out of commits.
+/sdk/java/**/bin/

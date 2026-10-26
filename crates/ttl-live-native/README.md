@@ -195,9 +195,11 @@ redistributing; the complete binary is not labelled solely as MIT.
 
 ### Bounded asynchronous delivery and metrics
 
-Callbacks remain synchronous by default. Before connecting, call
-`ttl_live_client_set_async_delivery(client, capacity)` with 1–256 queued deliveries
-to use one ordered dispatcher. Capacity 0 restores synchronous mode. A delivery
+Callbacks use one ordered dispatcher with 32 queued deliveries by default.
+Before connecting, `ttl_live_client_set_async_delivery(client, capacity)` selects
+1–256 queued deliveries; an additional 8 MiB estimated retained-byte limit applies
+to queued and active delivery, including batch metadata. Capacity 0 explicitly
+selects the legacy synchronous mode, where callbacks must return promptly. A delivery
 is a bounded batch, state transition, or error. Queue overflow stops reception,
 releases queued deliveries and reports a terminal error after the active callback;
 it does not continue silently losing gifts. Keep callbacks finite so disconnect

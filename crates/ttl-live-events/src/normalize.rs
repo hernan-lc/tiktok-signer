@@ -212,7 +212,7 @@ pub(crate) fn social(payload: &[u8]) -> Result<LiveEvent, prost::DecodeError> {
         share_display_style: message.share_display_style,
         follow_type: message.follow_type,
         scene: message.scene,
-        target_user_id: count(message.target_user_id),
+        target_user_id: message.target_user_id,
     }))
 }
 

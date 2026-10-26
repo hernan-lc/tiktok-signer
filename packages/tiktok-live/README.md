@@ -27,8 +27,9 @@ The Rust side of this repository does link QuickJS or V8, but only because Rust 
 its own. Shipping that through `napi` would put a JavaScript engine inside a JavaScript runtime and
 add a prebuilt binary per platform, in exchange for nothing.
 
-Everything else — discovery, the WebSocket, protobuf transport, and gzip — is Node built-ins and
-about 700 lines here. Generated schema bindings use the small `@bufbuild/protobuf` runtime.
+The WebSocket uses `ws` so authenticated handshakes preserve cookie, user-agent, and origin headers.
+Discovery and gzip use Node built-ins. Generated schema bindings use the small
+`@bufbuild/protobuf` runtime.
 
 ## What it does
 
@@ -79,7 +80,7 @@ new TikTokLive(uniqueId, {
   fetchGifts: true,     // ~2.6 MB, once per connection
   reconnect: { attempts: 5, initialMs: 2000, maxMs: 60000 },
   bundlePath,           // default: hash-verified, downloaded once, and cached in the temp directory
-  WebSocketImpl,        // default: global WebSocket (Node 22+); pass `ws` if yours lacks headers
+  WebSocketImpl,        // default: ws; custom transports must forward cookie/user-agent/origin headers
 })
 ```
 

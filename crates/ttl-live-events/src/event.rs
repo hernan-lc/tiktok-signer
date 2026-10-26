@@ -159,8 +159,8 @@ pub struct SocialEvent {
     /// `WebcastSocialMessage.scene` (field 15). Free-form tag; not interpreted.
     pub scene: String,
     /// `WebcastSocialMessage.target_user_id` (field 14), the follow target when
-    /// TikTok sends one. `0` when absent.
-    pub target_user_id: u64,
+    /// TikTok sends one. `0` when absent; negative wire sentinels remain unchanged.
+    pub target_user_id: i64,
 }
 
 /// Periodic viewer-count update.
@@ -258,6 +258,11 @@ pub struct DecodedEvent {
     pub event: LiveEvent,
     #[serde(skip)]
     pub schema: crate::SchemaMessage,
+    #[serde(skip)]
+    pub normalization_status: crate::NormalizationStatus,
+    /// Extracted independently of diagnostic presentation budgets.
+    #[serde(skip)]
+    pub timestamp: Option<u64>,
 }
 
 /// A decoded `ProtoMessageFetchResult` batch.
@@ -276,6 +281,44 @@ pub struct EventBatch {
 }
 
 impl EventBatch {
+    /// Conservative queue weight for owned payloads, schema nodes and metadata; not measured RSS.
+    pub fn estimated_retained_bytes(&self) -> usize {
+        fn fields_count(fields: &[crate::SchemaField]) -> usize {
+            fields.len()
+                + fields
+                    .iter()
+                    .map(|field| match &field.value {
+                        crate::SchemaValue::Message(object) => fields_count(&object.fields),
+                        _ => 0,
+                    })
+                    .sum::<usize>()
+        }
+        let metadata = self
+            .cursor
+            .capacity()
+            .saturating_add(self.internal_ext.capacity())
+            .saturating_add(self.push_server.capacity())
+            .saturating_add(
+                self.events
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<DecodedEvent>()),
+            );
+        self.events
+            .iter()
+            .fold(metadata.saturating_add(1024), |cost, event| {
+                cost.saturating_add(
+                    event
+                        .raw
+                        .payload
+                        .len()
+                        .saturating_mul(8)
+                        .saturating_add(event.raw.method.len().saturating_mul(4))
+                        .saturating_add(fields_count(&event.schema.fields).saturating_mul(512))
+                        .saturating_add(512),
+                )
+            })
+    }
+
     /// Iterates the normalised events, skipping the raw envelopes.
     pub fn events(&self) -> impl Iterator<Item = &LiveEvent> {
         self.events.iter().map(|decoded| &decoded.event)
@@ -356,7 +399,7 @@ impl DecodedEvent {
     }
     /// Timestamp from common.create_time, when present, in server-defined units.
     pub fn timestamp(&self) -> Option<u64> {
-        self.schema.message("common")?.number("create_time")
+        self.timestamp
     }
     pub fn to_json(&self, mode: JsonMode) -> Option<String> {
         use serde_json::json;
@@ -376,6 +419,7 @@ impl DecodedEvent {
                 "schema": {"known":self.schema.is_known(), "name":self.schema.schema.map(|s| s.name)},
                 "normalized":normalized(), "data":object_json(&self.schema.fields),
                 "wireFields":wire_json(&self.schema.fields), "flags":self.flags(),
+                "diagnostics": self.diagnostics(),
                 "raw":{"size":self.raw.payload.len()}, "timestamp":self.timestamp().map(|v| v.to_string())})
             }
             JsonMode::Raw => {

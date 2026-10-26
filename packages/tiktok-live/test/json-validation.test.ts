@@ -3,6 +3,21 @@ import test from 'node:test';
 
 import { TikTokImageSchema } from '../dist/gen/json/tiktok/image.js';
 import { JsonValidationError, validateJson } from '../dist/json-validation.js';
+import { SocialEventSchema } from '../dist/gen/json/public/social-event.js';
+import { WebcastSocialMessageSchema } from '../dist/gen/webcast/model/message/messages_pb.js';
+import { create, toBinary } from '@bufbuild/protobuf';
+import { decodeEvent, METHOD } from '../dist/events.js';
+
+test('the public social schema accepts the negative target observed in real traffic', () => {
+  const payload = toBinary(WebcastSocialMessageSchema, create(WebcastSocialMessageSchema, {
+    action: 1n, targetUserId: -1n,
+  }));
+  const event = decodeEvent(METHOD.social, payload);
+  assert.equal(event.type, 'social');
+  if (event.type !== 'social') assert.fail('expected social');
+  assert.equal(event.targetUserId, '-1');
+  assert.equal(validateJson(event, SocialEventSchema, 'social event'), event);
+});
 
 test('the generated TikTok image schema asserts URI values', () => {
   const image = { url_list: ['https://p16.tiktokcdn.com/image.webp'] };

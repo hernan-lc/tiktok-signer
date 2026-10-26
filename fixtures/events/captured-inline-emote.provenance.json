@@ -1,0 +1,20 @@
+{
+  "origin": "Reduced and sanitized from a real LIVE capture",
+  "capture_date_utc": "2026-10-25",
+  "original_batch_sha256": "2e8f0264afd17ee9bd539f4e7e04d0540f7cf31d1d76e60fc671949414767277",
+  "original_event_index": 3,
+  "preserved": [
+    "emote count",
+    "raw index",
+    "raw emote type",
+    "presence of id/image/package",
+    "content UTF-8 and UTF-16 lengths"
+  ],
+  "removed": [
+    "common metadata",
+    "participant identities",
+    "chat text",
+    "asset identifiers and URLs",
+    "unrelated nested fields"
+  ]
+}

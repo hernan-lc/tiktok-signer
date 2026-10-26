@@ -88,6 +88,12 @@ are **synthetic**. Their `expected/*.json` are produced by the Node oracle, so
 Rust, TypeScript and Java are compared against another implementation rather
 than against themselves.
 
+`fixtures/events/captured-inline-emote.pb` is a reduced, sanitized **real inline
+emote** observed on 2026-10-25. Rust and Node verify its content, normalized emote
+metadata and original wire presence against the Node oracle. The multi-room
+audit retains private original captures for full replay. This does not establish
+real standalone `WebcastEmoteChatMessage` coverage or the general unit of `index`.
+
 ## Android speech
 
 `TikTokSpeechSanitizer` removes recognised shortcode tokens from a chat comment

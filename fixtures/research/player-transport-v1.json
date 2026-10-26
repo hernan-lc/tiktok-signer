@@ -1,7 +1,7 @@
 {
   "what": "Facts read out of the live player's transport code, which ttl-sign-core reproduces.",
   "how": "node scripts/headless/player-audit.mjs --update",
-  "read_on": "2026-08-18",
+  "read_on": "2026-10-25",
   "facts": {
     "socket_hosts": [
       "wss://webcast-ws.eu.tiktok.com",
@@ -35,12 +35,11 @@
     ],
     "sdk_version_code": "180800",
     "update_version_code": "2.0.0",
-    "ws_signer": "registerWsSigner",
+    "ws_signer": "frontierSign",
     "ws_sign_input": [
-      "X-MS-Q",
-      "X-MS-STUB"
+      "X-MS-PAYLOAD"
     ],
-    "ws_sign_output": "X-Gnarly",
+    "ws_sign_output": "X-Bogus",
     "serializer_percent_encodes": false,
     "serializer_camel_to_snake": true,
     "protos": {
@@ -131,5 +130,6 @@
         }
       }
     }
-  }
+  },
+  "compatibility_note": "The registerWsSigner/X-Gnarly compatibility profile remains the default; both profiles received 445 events each in a simultaneous active-room verification on 2026-10-25."
 }

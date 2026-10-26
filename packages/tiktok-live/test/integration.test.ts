@@ -3,6 +3,7 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import NodeWebSocket from 'ws';
 
 import { carriesEvents, decodePushFrame } from '../dist/frames.js';
 import { TikTokLive } from '../dist/index.js';
@@ -17,14 +18,14 @@ test('the real transport accepts the generated enter-room frame', {
 }, async () => {
   const uniqueId = process.env.TIKTOK_LIVE_UNIQUE_ID;
   if (!uniqueId) throw new Error('TIKTOK_LIVE_UNIQUE_ID is required');
-  if (!globalThis.WebSocket) throw new Error('Node WebSocket is unavailable');
 
   let enterRoomSent = false;
   let eventReceived = false;
-  const WebSocketImpl = recordingWebSocket(globalThis.WebSocket, () => { enterRoomSent = true; });
+  const WebSocketImpl = recordingWebSocket(NodeWebSocket as unknown as WebSocketConstructor, () => { enterRoomSent = true; });
   const live = new TikTokLive(uniqueId, {
     roomId: process.env.TIKTOK_LIVE_ROOM_ID,
     sessionCookie: process.env.TIKTOK_LIVE_COOKIE,
+    bundlePath: process.env.TTL_BUNDLE,
     fetchGifts: false,
     fetchRoomInfo: false,
     WebSocketImpl,
@@ -45,18 +46,15 @@ test('the real transport accepts the generated enter-room frame', {
 });
 
 function recordingWebSocket(
-  NativeWebSocket: typeof WebSocket,
+  NativeWebSocket: WebSocketConstructor,
   onEnterRoom: () => void,
 ): WebSocketConstructor {
   class RecordingWebSocket implements WebSocketLike {
     readonly binaryType = 'arraybuffer';
-    readonly #native: WebSocket;
+    readonly #native: WebSocketLike;
 
-    constructor(url: string, _options: WebSocketOptions) {
-      // The standard Node WebSocket constructor has no headers argument. This opt-in public-room
-      // proof uses the URL/session-independent path; callers can use their own WebSocketImpl when
-      // an authenticated cookie must be attached.
-      this.#native = new NativeWebSocket(url);
+    constructor(url: string, options: WebSocketOptions) {
+      this.#native = new NativeWebSocket(url, options);
     }
 
     send(data: string | ArrayBuffer | ArrayBufferView): void {
@@ -82,7 +80,7 @@ function recordingWebSocket(
       listener: (event: { code: number; reason?: string }) => void,
     ): void;
     addEventListener(type: string, listener: (...args: never[]) => void): void {
-      this.#native.addEventListener(type, listener as EventListener);
+      (this.#native.addEventListener as (type: string, listener: (...args: never[]) => void) => void)(type, listener);
     }
   }
   return RecordingWebSocket;

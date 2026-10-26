@@ -108,10 +108,29 @@ fn main() {
         eprintln!("could not read {bundle_path}: {error}");
         std::process::exit(2);
     });
-    let cookies = std::env::var("TTL_COOKIES").unwrap_or_else(|_| {
-        eprintln!("set TTL_COOKIES to a guest cookie header (ttwid=...)");
-        std::process::exit(2);
-    });
+    let cookies = std::env::var("TTL_COOKIES")
+        .ok()
+        .or_else(|| {
+            let path = std::env::var_os("TTL_SESSION_FILE")
+                .map(std::path::PathBuf::from)
+                .or_else(|| {
+                    let base = std::env::var_os("XDG_CONFIG_HOME")
+                        .map(std::path::PathBuf::from)
+                        .or_else(|| {
+                            std::env::var_os("HOME")
+                                .map(|home| std::path::PathBuf::from(home).join(".config"))
+                        })?;
+                    Some(base.join("ttl-signer/session"))
+                })?;
+            std::fs::read_to_string(path)
+                .ok()
+                .map(|value| value.trim().to_owned())
+        })
+        .unwrap_or_else(|| {
+            eprintln!("set TTL_SESSION_FILE or TTL_COOKIES, or configure the ttl-signer session");
+            std::process::exit(2);
+        });
+    let audit_only = std::env::var_os("TTL_AUDIT_ONLY").is_some();
 
     let overloaded = Arc::new(AtomicBool::new(false));
     let (events_tx, events) = mpsc::sync_channel(1024);
@@ -134,6 +153,8 @@ fn main() {
 
     let deadline = Instant::now() + Duration::from_secs(seconds);
     let mut count = 0usize;
+    let mut errors = 0usize;
+    let mut types = std::collections::BTreeMap::<String, usize>::new();
     while Instant::now() < deadline {
         if overloaded.load(Ordering::Acquire) {
             eprintln!(
@@ -142,11 +163,19 @@ fn main() {
             break;
         }
         for (kind, detail) in states.try_iter() {
+            if kind == "error" || kind == "decode_error" {
+                errors += 1;
+            }
             println!("[state] {kind}: {detail}");
         }
         for json in events.try_iter() {
             count += 1;
-            if count <= 40 {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) {
+                *types
+                    .entry(value["type"].as_str().unwrap_or("unknown").to_owned())
+                    .or_default() += 1;
+            }
+            if count <= 40 && !audit_only {
                 println!("[event] {}", summarize(&json));
             }
         }
@@ -154,4 +183,11 @@ fn main() {
     }
     println!("--- disconnecting after {count} events ---");
     client.disconnect();
+    println!(
+        "AUDIT {}",
+        serde_json::json!({"events": count, "errors": errors, "types": types, "overloaded": overloaded.load(Ordering::Acquire)})
+    );
+    if count == 0 || errors > 0 || overloaded.load(Ordering::Acquire) {
+        std::process::exit(1);
+    }
 }

@@ -86,7 +86,7 @@ pub enum SocialEvidence {
     /// `scene`, when non-empty.
     Scene(String),
     /// `target_user_id`, when non-zero.
-    TargetUserId(u64),
+    TargetUserId(i64),
 }
 
 /// The result of classifying one social message.

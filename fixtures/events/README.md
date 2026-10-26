@@ -77,3 +77,12 @@ Java, Node, and Rust. A Rust `NoRoom` maps to OFFLINE at the presence boundary.
 whose diagnostic view exceeded eight nesting levels. All numeric values were
 replaced with 1, all strings with `fixture`, and all opaque bytes/unknown
 fields removed. No original LIVE sender, ID, text or URL is retained.
+
+`captured-inline-emote.pb` is reduced and sanitized from a real LIVE chat captured
+on 2026-10-25 during the multi-room audit. Its provenance JSON records the source
+batch hash and event offset without exposing participant identities. The original
+emote count, index and type are retained; text is replaced while preserving UTF-8
+and UTF-16 lengths, and user/asset identifiers and URLs are replaced. Unrelated
+fields are removed. `expected/captured-inline-emote.json` comes from Node, and
+both Rust and Node test it. Reproduce the reduction with
+`packages/tiktok-live/scripts/sanitize-emote-fixture.mjs` on a private source batch.

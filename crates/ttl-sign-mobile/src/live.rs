@@ -1,11 +1,15 @@
 //! Mobile compatibility frontend over the shared cancellable LIVE worker.
 use crate::{mobile_preset, MobileError, MobileSigner, Product};
-use std::{sync::Arc, thread};
+use std::{
+    sync::{Arc, Mutex},
+    thread,
+};
 use tokio::sync::watch;
+use ttl_live_core::LiveSink as _;
 use ttl_live_events::LiveEvent;
 use ttl_sign_core::CookieJar;
 
-/// Callbacks are serialized on the LIVE worker. Legacy JSON is unchanged.
+/// Callbacks are serialized on a bounded dispatcher thread. Legacy JSON is unchanged.
 pub trait LiveSink: Send + 'static {
     fn on_state(&self, kind: &str, detail: &str);
     fn on_event(&self, json: &str);
@@ -25,6 +29,7 @@ pub fn event_json(event: &LiveEvent) -> String {
 pub struct LiveClient {
     stop: watch::Sender<bool>,
     worker: Option<thread::JoinHandle<()>>,
+    callback_thread: Arc<Mutex<Option<thread::ThreadId>>>,
 }
 struct Signer(Arc<MobileSigner>);
 impl ttl_live_core::SocketSigner for Signer {
@@ -32,35 +37,59 @@ impl ttl_live_core::SocketSigner for Signer {
         Box::pin(async move { self.0.sign_async(url, Product::Ws).await.map_err(|_| ()) })
     }
 }
-struct Sink(Box<dyn LiveSink>);
+#[derive(Clone)]
+struct Sink {
+    inner: Arc<Mutex<Box<dyn LiveSink>>>,
+    callback_thread: Arc<Mutex<Option<thread::ThreadId>>>,
+}
+impl Sink {
+    fn mark_callback(&self) {
+        *self
+            .callback_thread
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(thread::current().id());
+    }
+}
 impl ttl_live_core::LiveSink for Sink {
     fn on_state(&self, state: ttl_live_core::State, detail: &str) {
         use ttl_live_core::State::*;
-        self.0.on_state(
-            match state {
-                Disconnected => "closed",
-                Connecting => "connecting",
-                Connected => "open",
-                Reconnecting => "reconnecting",
-                Offline => "offline",
-                Error => "error",
-            },
-            detail,
-        );
+        self.mark_callback();
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .on_state(
+                match state {
+                    Disconnected => "closed",
+                    Connecting => "connecting",
+                    Connected => "open",
+                    Reconnecting => "reconnecting",
+                    Offline => "offline",
+                    Error => "error",
+                },
+                detail,
+            );
     }
     fn on_error(&self, error: ttl_live_core::Error, _retryable: bool) {
-        self.0.on_state(
-            if error == ttl_live_core::Error::Decode {
-                "decode_error"
-            } else {
-                "error"
-            },
-            "LIVE operation failed",
-        );
+        self.mark_callback();
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .on_state(
+                if error == ttl_live_core::Error::Decode {
+                    "decode_error"
+                } else {
+                    "error"
+                },
+                "LIVE operation failed",
+            );
     }
     fn on_batch(&self, batch: ttl_live_events::EventBatch) {
         for event in &batch.events {
-            self.0.on_event(&event_json(&event.event));
+            self.mark_callback();
+            self.inner
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .on_event(&event_json(&event.event));
         }
     }
 }
@@ -91,36 +120,68 @@ impl LiveClient {
         let signer = Signer(Arc::new(MobileSigner::new(bundle, options_json)?));
         let (stop, rx) = watch::channel(false);
         let room = room_id.to_owned();
+        let callback_thread = Arc::new(Mutex::new(None));
+        let callback_thread_worker = callback_thread.clone();
         let worker = thread::Builder::new()
             .name("ttl-live-mobile".into())
             .spawn(move || {
-                let sink = Sink(Box::new(sink));
+                let sink = Sink {
+                    inner: Arc::new(Mutex::new(Box::new(sink))),
+                    callback_thread: callback_thread_worker,
+                };
                 match tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
                 {
-                    Ok(rt) => rt.block_on(ttl_live_core::run(
-                        &signer,
-                        &cookies,
-                        &mobile_preset(),
-                        &room,
-                        max_attempts.saturating_sub(1),
-                        &sink,
-                        rx,
-                    )),
-                    Err(_) => sink.0.on_state("error", "no async runtime"),
+                    Ok(rt) => {
+                        if rt
+                            .block_on(ttl_live_core::run_buffered(
+                                &signer,
+                                &cookies,
+                                &mobile_preset(),
+                                &room,
+                                max_attempts.saturating_sub(1),
+                                sink.clone(),
+                                rx,
+                            ))
+                            .is_err()
+                        {
+                            // If callbacks already ran, the error came from a callback panic.
+                            // Do not invoke a failed consumer again. A spawn failure is still
+                            // reported through the original sink on this worker.
+                            let never_started = sink
+                                .callback_thread
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .is_none();
+                            if never_started {
+                                sink.on_state(
+                                    ttl_live_core::State::Error,
+                                    "could not start LIVE callback dispatcher",
+                                );
+                            }
+                        }
+                    }
+                    Err(_) => sink.on_state(ttl_live_core::State::Error, "no async runtime"),
                 }
             })
             .map_err(|e| MobileError::Engine(e.to_string()))?;
         Ok(Self {
             stop,
             worker: Some(worker),
+            callback_thread,
         })
     }
     pub fn disconnect(mut self) {
         self.stop.send_replace(true);
         if let Some(w) = self.worker.take() {
-            if w.thread().id() != thread::current().id() {
+            if w.thread().id() != thread::current().id()
+                && *self
+                    .callback_thread
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    != Some(thread::current().id())
+            {
                 let _ = w.join();
             }
         }
@@ -130,7 +191,13 @@ impl Drop for LiveClient {
     fn drop(&mut self) {
         self.stop.send_replace(true);
         if let Some(w) = self.worker.take() {
-            if w.thread().id() != thread::current().id() {
+            if w.thread().id() != thread::current().id()
+                && *self
+                    .callback_thread
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    != Some(thread::current().id())
+            {
                 let _ = w.join();
             }
         }
@@ -140,6 +207,37 @@ impl Drop for LiveClient {
 mod tests {
     use super::*;
     use ttl_live_events::{ChatEvent, EventUser};
+
+    #[test]
+    fn dispatcher_initiated_disconnect_does_not_join_worker_waiting_for_dispatcher() {
+        let (stop, _rx) = watch::channel(false);
+        let callback_thread = Arc::new(Mutex::new(None));
+        let callback_thread_copy = callback_thread.clone();
+        let (send_client, receive_client) = std::sync::mpsc::channel::<LiveClient>();
+        let (release, wait_for_callback) = std::sync::mpsc::channel();
+        let (finished, done) = std::sync::mpsc::channel();
+        let dispatcher = thread::spawn(move || {
+            *callback_thread_copy.lock().unwrap() = Some(thread::current().id());
+            receive_client.recv().unwrap().disconnect();
+            finished.send(()).unwrap();
+            release.send(()).unwrap();
+        });
+        let worker = thread::spawn(move || {
+            wait_for_callback
+                .recv_timeout(std::time::Duration::from_secs(3))
+                .unwrap();
+        });
+        send_client
+            .send(LiveClient {
+                stop,
+                worker: Some(worker),
+                callback_thread,
+            })
+            .unwrap();
+        done.recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        dispatcher.join().unwrap();
+    }
 
     fn user() -> EventUser {
         EventUser {
@@ -164,6 +262,7 @@ mod tests {
             .send(LiveClient {
                 stop,
                 worker: Some(worker),
+                callback_thread: Arc::new(Mutex::new(None)),
             })
             .unwrap();
         assert!(done

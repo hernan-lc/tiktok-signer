@@ -2887,6 +2887,7 @@ dependencies = [
 name = "ttl-live-core"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "futures-util",
  "prost",
  "rustls",

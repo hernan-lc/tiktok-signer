@@ -36,7 +36,7 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
 use ttl_sign_core::proto::PushFrame;
 use ttl_sign_core::{Compression, CookieJar, FetchResult, Preset, SignedFetch, WsParams};
@@ -385,14 +385,16 @@ impl LiveConnection {
         let (extension, need_ack) = batch_ack_metadata(&payload)?;
         self.internal_ext.clear();
         self.internal_ext.push_str(extension);
-        self.last_ack_was_sent = need_ack;
+        self.last_ack_was_sent = false;
         self.last_ack_duration = Duration::ZERO;
         if need_ack {
             let ack = frame.ack_for_batch(&self.internal_ext);
             let ack_started = std::time::Instant::now();
-            if let Err(e) = self.stream.send(WsMessage::Binary(ack.encode())).await {
-                warn!(error = %e, "could not send ack");
-            }
+            self.stream
+                .send(WsMessage::Binary(ack.encode()))
+                .await
+                .map_err(|e| WsError::Closed(format!("ack failed: {e}")))?;
+            self.last_ack_was_sent = true;
             self.last_ack_duration = ack_started.elapsed();
         }
 
@@ -503,6 +505,45 @@ fn gunzip(data: &[u8]) -> Result<Vec<u8>, WsError> {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn ack_write_failure_is_returned_and_not_reported_as_success() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let peer = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+            while let Some(Ok(message)) = ws.next().await {
+                if message.is_close() {
+                    break;
+                }
+            }
+        });
+        let mut connection = LiveConnection::open_uri(
+            &format!("ws://{address}/?room_id=1"),
+            &CookieJar::parse("ttwid=offline"),
+            "offline",
+            "",
+            &ConnectConfig::default(),
+        )
+        .await
+        .unwrap();
+        connection.stream.close(None).await.unwrap();
+        let mut payload = include_bytes!("../../../fixtures/events/batch.pb").to_vec();
+        payload.extend_from_slice(&[0x48, 1]);
+        let frame = PushFrame {
+            log_id: 42,
+            payload_type: "msg".into(),
+            payload,
+            ..Default::default()
+        };
+        let result = connection.handle_frame(&frame.encode()).await;
+        assert!(matches!(result, Err(WsError::Closed(message)) if message.contains("ack failed")));
+        assert!(!connection.last_ack_was_sent());
+        tokio::time::timeout(Duration::from_secs(1), peer)
+            .await
+            .unwrap()
+            .unwrap();
+    }
     #[tokio::test]
     async fn invalid_heartbeat_is_rejected_before_io() {
         for heartbeat in [Duration::ZERO, Duration::MAX] {

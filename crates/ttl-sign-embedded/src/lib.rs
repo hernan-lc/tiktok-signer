@@ -224,8 +224,9 @@ impl<E: Engine + 'static> Signer<E> {
 
     /// As [`Signer::new`], with the product this signer applies by default.
     ///
-    /// The products are not interchangeable: the socket verifies `registerWsSigner`'s `X-Gnarly`,
-    /// and the patched-fetch suffix or `frontierSign` produce parameters it ignores.
+    /// Select the product for the route and SDK profile being reproduced. The
+    /// compatibility WebSocket profile uses `registerWsSigner`/`X-Gnarly`; a
+    /// served player can instead use the public `frontierSign`/`X-Bogus` profile.
     pub fn with_product(
         bundle: impl Into<String>,
         profile: Profile,

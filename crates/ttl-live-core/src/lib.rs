@@ -1,6 +1,8 @@
 //! One transport loop for native and mobile frontends. No FFI or signer engine.
 use std::{future::Future, pin::Pin, time::Duration};
 use tokio::sync::watch;
+mod buffered;
+pub use buffered::run_buffered;
 use ttl_live_events::EventBatch;
 use ttl_live_ws::{ConnectConfig, LiveConnection, ReconnectPolicy};
 use ttl_sign_core::{CookieJar, Preset};
@@ -25,10 +27,12 @@ pub enum Error {
     Socket,
     Timeout,
     Decode,
+    Backpressure,
     Protocol,
     Auth(u16),
     SocketStatus(u16),
 }
+/// Inline sinks must return promptly; use `run_buffered` for blocking consumers.
 pub trait LiveSink {
     fn on_state(&self, state: State, detail: &str);
     fn on_error(&self, error: Error, retryable: bool);

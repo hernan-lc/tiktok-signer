@@ -28,6 +28,19 @@ class ProtocolParityTest {
     }
 
     @Test
+    void sanitizedRealInlineEmoteMatchesTheNodeOracle() throws Exception {
+        var expected = JSON.readTree(read("expected/captured-inline-emote.json"));
+        var envelope = BaseProtoMessage.newBuilder()
+                .setMethod("WebcastChatMessage")
+                .setPayload(ByteString.copyFrom(read("captured-inline-emote.pb")))
+                .build();
+        var event = assertInstanceOf(ChatEvent.class, EventDecoder.decode(envelope));
+        assertEquals(expected.path("comment").asText(), event.comment());
+        assertEquals(expected.path("emotes"), emotesJson(event.emotes()));
+        assertEquals("fixture", event.user().nickname());
+    }
+
+    @Test
     void perBatchAckMatchesSharedPlayerReferenceFixture() throws Exception {
         var fixture = JSON.readTree(Files.readAllBytes(ROOT.resolve("fixtures/research/player-ack-protocol-v1.json")));
         for (var item : fixture.path("synthetic_cases")) {

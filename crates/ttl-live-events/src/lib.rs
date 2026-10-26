@@ -25,7 +25,11 @@
 //! # }
 //! ```
 
+mod diagnostics;
 pub mod dynamic;
+pub use diagnostics::{
+    AuditReport, EventDiagnostics, MethodAudit, NormalizationStatus, UnknownEnum, UnknownField,
+};
 mod event;
 mod normalize;
 pub mod social;
@@ -38,6 +42,7 @@ pub use event::{
     TopViewer, MAX_EMOTES_PER_EVENT, MAX_EMOTE_ID_LENGTH, MAX_EMOTE_URL_LENGTH,
 };
 pub use social::{SocialClassification, SocialConfidence, SocialEvidence, SocialKind};
+pub use ttl_live_proto::UPSTREAM_COMMIT as SCHEMA_UPSTREAM_COMMIT;
 pub use user::EventUser;
 
 use event::RawEvent as Raw;
@@ -134,6 +139,7 @@ pub struct SelectedEvent {
     /// Any requested representation is incomplete. In Full mode the schema
     /// view can be truncated while the canonical event remains valid.
     pub truncated: bool,
+    pub normalization_status: NormalizationStatus,
 }
 
 /// Batch metadata has the same meaning as in the legacy EventBatch.
@@ -177,19 +183,20 @@ pub fn decode_batch_with_mode(
             };
             // Validate canonical input independently from the bounded debug
             // view. Reaching its depth/field budget does not corrupt protobuf.
-            let (wire_truncated, timestamp) =
+            let (wire_issue, timestamp) =
                 dynamic::preflight_event(&message.method, &message.payload, &mut wire_budget);
-            let normalization_truncated = oversized || wire_truncated;
-            let truncated = normalization_truncated || schema.as_ref().is_some_and(|s| s.truncated);
-            let mut event = if matches!(mode, DecodeMode::Full | DecodeMode::Normalized)
-                && !normalization_truncated
-            {
-                normalize_payload(&message.method, &message.payload)
-                    .ok()
-                    .flatten()
+            let issue = if oversized {
+                Some(NormalizationStatus::PayloadLimit)
             } else {
-                None
+                wire_issue
             };
+            let truncated = issue.is_some() || schema.as_ref().is_some_and(|s| s.truncated);
+            let (mut event, normalization_status) =
+                if matches!(mode, DecodeMode::Full | DecodeMode::Normalized) {
+                    normalize_checked(&message.method, &message.payload, issue)
+                } else {
+                    (None, issue.unwrap_or(NormalizationStatus::NotRequested))
+                };
             let retain_payload = matches!(mode, DecodeMode::Full | DecodeMode::Raw);
             let payload = if retain_payload {
                 Some(message.payload)
@@ -217,6 +224,7 @@ pub fn decode_batch_with_mode(
                 event,
                 schema,
                 truncated,
+                normalization_status,
             }
         })
         .collect();
@@ -228,6 +236,21 @@ pub fn decode_batch_with_mode(
         heartbeat_duration: result.heartbeat_duration,
         push_server: result.push_server,
     })
+}
+
+fn normalize_checked(
+    method: &str,
+    payload: &[u8],
+    issue: Option<NormalizationStatus>,
+) -> (Option<LiveEvent>, NormalizationStatus) {
+    if let Some(issue) = issue {
+        return (None, issue);
+    }
+    match normalize_payload(method, payload) {
+        Ok(Some(event)) => (Some(event), NormalizationStatus::Normalized),
+        Ok(None) => (None, NormalizationStatus::UnsupportedMethod),
+        Err(_) => (None, NormalizationStatus::DecodeError),
+    }
 }
 
 fn normalize_payload(
@@ -306,23 +329,21 @@ fn decode_envelope_budget(
     let mut schema = dynamic::decode_webcast_message_budget(method, payload, schema_budget)
         .expect("partial decoder is infallible");
     schema.truncated |= oversized;
-    let (wire_truncated, _) = dynamic::preflight_event(method, payload, wire_budget);
-    let normalized = if oversized || wire_truncated {
-        Ok(unknown(&raw))
+    let (wire_issue, timestamp) = dynamic::preflight_event(method, payload, wire_budget);
+    let issue = if oversized {
+        Some(NormalizationStatus::PayloadLimit)
     } else {
-        match method {
-            method::CHAT => normalize::chat(payload),
-            method::EMOTE_CHAT => normalize::emote_chat(payload),
-            method::GIFT => normalize::gift(payload),
-            method::LIKE => normalize::like(payload),
-            method::MEMBER => normalize::member(payload),
-            method::SOCIAL => normalize::social(payload),
-            method::ROOM_USER => normalize::room_user(payload),
-            _ => Ok(unknown(&raw)),
-        }
+        wire_issue
     };
-    let event = normalized.unwrap_or_else(|_| unknown(&raw));
-    DecodedEvent { raw, event, schema }
+    let (event, normalization_status) = normalize_checked(method, payload, issue);
+    let event = event.unwrap_or_else(|| unknown(&raw));
+    DecodedEvent {
+        raw,
+        event,
+        schema,
+        normalization_status,
+        timestamp,
+    }
 }
 
 fn unknown(raw: &Raw) -> LiveEvent {

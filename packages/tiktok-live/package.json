@@ -32,12 +32,14 @@
     "check": "npm run proto:check && npm run schema:check && npm run typecheck && npm test"
   },
   "dependencies": {
-    "@bufbuild/protobuf": "^2.14.1"
+    "@bufbuild/protobuf": "^2.14.1",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@bufbuild/buf": "^1.72.0",
     "@bufbuild/protoc-gen-es": "^2.14.1",
     "@types/node": "^22.10.2",
+    "@types/ws": "^8.18.2",
     "typescript": "^5.9.3"
   }
 }

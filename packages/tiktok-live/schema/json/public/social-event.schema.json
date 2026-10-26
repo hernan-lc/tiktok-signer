@@ -18,7 +18,7 @@
         "shareDisplayStyle": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "followType": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "scene": { "type": "string" },
-        "targetUserId": { "type": "string", "pattern": "^[0-9]+$" }
+        "targetUserId": { "type": "string", "pattern": "^-?[0-9]+$", "description": "Raw int64 target; negative wire sentinels are preserved." }
       },
       "required": ["type", "user", "action", "followCount", "shareCount"],
       "additionalProperties": true,

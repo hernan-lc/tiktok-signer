@@ -576,6 +576,11 @@ pub enum SigningProduct {
 /// returns the same rooms as JSON and is merely signed, which is why listing live channels needs
 /// no rendering engine.
 pub fn live_search_url(keyword: &str, offset: usize) -> String {
+    live_search_url_with_context(keyword, offset, "")
+}
+
+/// Continue the same search using the first page's impression ID.
+pub fn live_search_url_with_context(keyword: &str, offset: usize, search_id: &str) -> String {
     // Built from pairs rather than one long literal: a line-continued string silently keeps the
     // indentation as spaces inside the query, which TikTok answers with a body that has no data.
     let mut url = String::from("https://www.tiktok.com/api/search/live/full/?");
@@ -604,7 +609,7 @@ pub fn live_search_url(keyword: &str, offset: usize) -> String {
         ("region", "US"),
         ("screen_height", "1080"),
         ("screen_width", "1920"),
-        ("search_id", ""),
+        ("search_id", search_id),
     ];
     for (index, (name, value)) in pairs.iter().enumerate() {
         if index > 0 {
@@ -648,6 +653,78 @@ pub struct LiveRoom {
 pub fn interpret_live_search(body: &str) -> Result<Vec<LiveRoom>, DiscoveryError> {
     let value: serde_json::Value =
         serde_json::from_str(body).map_err(|error| DiscoveryError::Decode(error.to_string()))?;
+    interpret_live_search_value(&value)
+}
+
+/// Server continuation for a search. The search ID remains from its first page;
+/// per-request impression IDs from later pages must not replace that context.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveSearchCursor {
+    pub offset: usize,
+    pub search_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveSearchPage {
+    pub rooms: Vec<LiveRoom>,
+    pub next: Option<LiveSearchCursor>,
+}
+
+pub fn interpret_live_search_page(
+    body: &str,
+    previous: Option<&LiveSearchCursor>,
+) -> Result<LiveSearchPage, DiscoveryError> {
+    let value: serde_json::Value =
+        serde_json::from_str(body).map_err(|error| DiscoveryError::Decode(error.to_string()))?;
+    let more = match value.get("has_more") {
+        Some(serde_json::Value::Bool(value)) => *value,
+        Some(value) if value.as_u64() == Some(1) => true,
+        Some(value) if value.as_u64() == Some(0) => false,
+        None => false, // legacy non-paginated response; no continuation is asserted
+        _ => {
+            return Err(DiscoveryError::Decode(
+                "invalid live search has_more".into(),
+            ))
+        }
+    };
+    // A terminal continuation may omit data entirely. Do not apply this exception
+    // to unstructured first-page bodies or to refusals that merely omit data.
+    let rooms = if previous.is_some()
+        && value.get("data").is_none()
+        && value.get("status_code").and_then(|v| v.as_i64()) == Some(0)
+        && value.get("has_more").is_some()
+        && !more
+    {
+        Vec::new()
+    } else {
+        interpret_live_search_value(&value)?
+    };
+    let next = if more {
+        let offset = value
+            .get("cursor")
+            .and_then(|v| v.as_u64().or_else(|| v.as_str()?.parse().ok()))
+            .and_then(|v| usize::try_from(v).ok())
+            .ok_or_else(|| DiscoveryError::Decode("missing live search cursor".into()))?;
+        if offset <= previous.map_or(0, |p| p.offset) {
+            return Err(DiscoveryError::Decode(
+                "live search cursor did not advance".into(),
+            ));
+        }
+        let search_id = previous
+            .map(|p| p.search_id.as_str())
+            .filter(|id| !id.is_empty())
+            .or_else(|| value.get("log_pb")?.get("impr_id")?.as_str())
+            .filter(|id| !id.is_empty() && id.len() <= 256)
+            .ok_or_else(|| DiscoveryError::Decode("missing live search context".into()))?
+            .to_owned();
+        Some(LiveSearchCursor { offset, search_id })
+    } else {
+        None
+    };
+    Ok(LiveSearchPage { rooms, next })
+}
+
+fn interpret_live_search_value(value: &serde_json::Value) -> Result<Vec<LiveRoom>, DiscoveryError> {
     // TikTok sometimes answers HTTP 200 with a login/rate-limit refusal in
     // status_code. Do not turn that into an empty list of available rooms.
     if let Some(status_code) = value.get("status_code").and_then(serde_json::Value::as_i64) {
@@ -725,11 +802,30 @@ impl DiscoveryClient {
         self.live_channels_page(keyword, 0).await
     }
 
-    /// Browse one page of currently live rooms without automatically connecting.
+    /// Offset-only legacy search. For reliable pagination use `live_channels_context`,
+    /// which propagates the server's search ID and cursor across pages.
     ///
     /// The caller controls pagination/rate limits and selects a creator explicitly.
     /// An empty page is not proof that no one is broadcasting; the upstream search
     /// may be incomplete. The returned rooms are ordered by viewer count.
+    /// Fetch a search page while retaining the server cursor and original search ID.
+    pub async fn live_channels_context(
+        &self,
+        keyword: &str,
+        cursor: Option<&LiveSearchCursor>,
+    ) -> Result<LiveSearchPage, DiscoveryError> {
+        let url = live_search_url_with_context(
+            keyword,
+            cursor.map_or(0, |c| c.offset),
+            cursor.map_or("", |c| c.search_id.as_str()),
+        );
+        let body = self.read(&url).await?;
+        let mut page = interpret_live_search_page(&body, cursor)?;
+        page.rooms
+            .sort_by_key(|room| std::cmp::Reverse(room.viewers));
+        Ok(page)
+    }
+
     pub async fn live_channels_page(
         &self,
         keyword: &str,

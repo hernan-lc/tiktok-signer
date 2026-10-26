@@ -1,0 +1,18 @@
+{
+  "type": "chat",
+  "user": {
+    "userId": "1",
+    "nickname": "fixture",
+    "uniqueId": "fixture",
+    "secUid": ""
+  },
+  "comment": " ",
+  "emotes": [
+    {
+      "id": "fixture-emote-1",
+      "imageUrl": "https://fixture.invalid/emote.webp",
+      "index": 0
+    }
+  ],
+  "method": "WebcastChatMessage"
+}

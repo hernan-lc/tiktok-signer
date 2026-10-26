@@ -304,3 +304,7 @@ test('the client preserves message identity and the history flag', async () => {
   assert.equal(emoteChat?.isHistory, true);
   live.disconnect();
 });
+
+test('the sanitized real inline emote matches its independently recorded public shape', () => {
+  assert.deepEqual(decodeEvent(METHOD.chat, fixture('captured-inline-emote.pb')), expected('captured-inline-emote.pb'));
+});

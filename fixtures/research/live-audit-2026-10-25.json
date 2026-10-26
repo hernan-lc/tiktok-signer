@@ -1,0 +1,195 @@
+{
+  "date": "2026-10-25",
+  "scope": "100 distinct real LIVE rooms, one configured session and network location; 20 concurrent sockets; 90 seconds per room",
+  "requested_rooms": 100,
+  "observed_rooms": 100,
+  "distinct_room_count": 100,
+  "status_counts": {
+    "ok": 100
+  },
+  "frames": 5686,
+  "events": 12829,
+  "normalization_status_counts": {
+    "unsupported_method": 1273,
+    "normalized": 11556
+  },
+  "normalized_emotes": 35,
+  "wire_emote_entries": 35,
+  "emote_events": 23,
+  "rooms_with_emotes": 10,
+  "batch_decode_errors": 0,
+  "capture_errors": 0,
+  "unretained_evidence_frames": 0,
+  "retained_frames": 364,
+  "retained_capture_replay": {
+    "rooms_verified": 100,
+    "events": 1356,
+    "public_schema_checks": 866,
+    "parity_failures": 0
+  },
+  "method_counts": {
+    "WebcastAISummaryMessage": 21,
+    "WebcastAccessRecallMessage": 1,
+    "WebcastBarrageMessage": 19,
+    "WebcastChatMessage": 3583,
+    "WebcastCommentTrayMessage": 144,
+    "WebcastControlMessage": 5,
+    "WebcastEnvelopeMessage": 1,
+    "WebcastGameServerFeatureMessage": 133,
+    "WebcastGiftDynamicRestrictionMessage": 82,
+    "WebcastGiftMessage": 165,
+    "WebcastGiftPanelUpdateMessage": 135,
+    "WebcastGoalUpdateMessage": 32,
+    "WebcastHostBoardMessage": 2,
+    "WebcastHotRoomMessage": 2,
+    "WebcastImDeleteMessage": 5,
+    "WebcastLikeMessage": 1956,
+    "WebcastLinkLayerMessage": 62,
+    "WebcastLinkMessage": 56,
+    "WebcastLinkMicArmies": 31,
+    "WebcastLinkMicBattle": 2,
+    "WebcastLinkMicBattleItemCard": 2,
+    "WebcastLinkMicBattlePunishFinish": 1,
+    "WebcastLinkMicFanTicketMethod": 203,
+    "WebcastLinkMicLayoutStateMessage": 39,
+    "WebcastLinkMicMethod": 108,
+    "WebcastLinkmicBattleTaskMessage": 1,
+    "WebcastMemberMessage": 2754,
+    "WebcastPrivilegeAdvanceMessage": 23,
+    "WebcastRankTextMessage": 1,
+    "WebcastRoomMessage": 8,
+    "WebcastRoomPinMessage": 7,
+    "WebcastRoomUserSeqMessage": 2450,
+    "WebcastSocialMessage": 648,
+    "WebcastStreamStatusMessage": 1,
+    "WebcastUnauthorizedMemberMessage": 5,
+    "WebcastUpdateShareRevenueNoticeMessage": 79,
+    "WebcastViewerPicksUpdateMessage": 62
+  },
+  "privacy": "Aggregate counts only. Original captures, room identities, cookies, signed URLs, and mutated fuzz inputs remain untracked in .local/.",
+  "limits": [
+    "Retained baseline/novel/emote frames were replayed; the remaining frames were inspected by the Rust audit in memory.",
+    "Real emotes were delivered as WebcastChatMessage.emotes. No WebcastEmoteChatMessage was observed.",
+    "Unknown methods/fields/enums remain observable in the raw/schema views; semantic labels were not invented."
+  ],
+  "native_lifecycle_soak": {
+    "duration_seconds": 1801.82,
+    "cycles": 1790,
+    "events": 5309755,
+    "baseline_rss_kib": 5304,
+    "peak_rss_kib": 8832,
+    "final_rss_kib": 7800,
+    "threads_between_cycles": 2,
+    "invariants": [
+      "received = dispatched + discarded after shutdown",
+      "no callbacks after destroy",
+      "workers joined after each cycle"
+    ],
+    "fixture_kind": "offline replay; not live traffic"
+  },
+  "release_loopback_measurements": [
+    {
+      "connections": 32,
+      "gzip": false,
+      "buffered": false,
+      "returncode": 0,
+      "cpu_seconds": 1.037099,
+      "sampled_peak_rss_kib": 27620,
+      "sampled_peak_fds": 71,
+      "sampled_peak_threads": 6,
+      "metrics": [
+        "ack_write_us_p50=10 p95=18 p99=30",
+        "decode_us_p50=176 p95=433 p99=645",
+        "callback_including_verification_us_p50=51 p95=125 p99=182",
+        "ack_roundtrip_us_p50=2483 p95=4321 p99=40622",
+        "connections=32 gzip=false buffered=false batches=3200 events=14176 elapsed=304.325193ms batches_per_second=10515"
+      ]
+    },
+    {
+      "connections": 256,
+      "gzip": false,
+      "buffered": false,
+      "returncode": 0,
+      "cpu_seconds": 7.74452,
+      "sampled_peak_rss_kib": 66388,
+      "sampled_peak_fds": 519,
+      "sampled_peak_threads": 6,
+      "metrics": [
+        "ack_write_us_p50=10 p95=20 p99=32",
+        "decode_us_p50=166 p95=420 p99=577",
+        "callback_including_verification_us_p50=52 p95=127 p99=180",
+        "ack_roundtrip_us_p50=18994 p95=34268 p99=45736",
+        "connections=256 gzip=false buffered=false batches=25600 events=113408 elapsed=3.074767424s batches_per_second=8326"
+      ]
+    },
+    {
+      "connections": 256,
+      "gzip": true,
+      "buffered": false,
+      "returncode": 0,
+      "cpu_seconds": 8.828464,
+      "sampled_peak_rss_kib": 39508,
+      "sampled_peak_fds": 519,
+      "sampled_peak_threads": 6,
+      "metrics": [
+        "ack_write_us_p50=11 p95=21 p99=35",
+        "decode_us_p50=173 p95=435 p99=599",
+        "callback_including_verification_us_p50=52 p95=128 p99=186",
+        "ack_roundtrip_us_p50=21549 p95=39013 p99=51077",
+        "connections=256 gzip=true buffered=false batches=25600 events=113408 elapsed=3.368259533s batches_per_second=7600"
+      ]
+    },
+    {
+      "connections": 1024,
+      "gzip": true,
+      "buffered": false,
+      "returncode": 0,
+      "cpu_seconds": 40.29783200000001,
+      "sampled_peak_rss_kib": 97336,
+      "sampled_peak_fds": 2055,
+      "sampled_peak_threads": 6,
+      "metrics": [
+        "ack_write_us_p50=11 p95=22 p99=41",
+        "decode_us_p50=208 p95=527 p99=715",
+        "callback_including_verification_us_p50=53 p95=148 p99=218",
+        "ack_roundtrip_us_p50=102111 p95=170901 p99=212915",
+        "connections=1024 gzip=true buffered=false batches=102400 events=453632 elapsed=12.226159824s batches_per_second=8375"
+      ]
+    },
+    {
+      "connections": 16,
+      "gzip": true,
+      "buffered": true,
+      "returncode": 0,
+      "cpu_seconds": 1.0053319999999983,
+      "sampled_peak_rss_kib": 23392,
+      "sampled_peak_fds": 39,
+      "sampled_peak_threads": 22,
+      "metrics": [
+        "ack_write_us_p50=12 p95=24 p99=37",
+        "decode_us_p50=270 p95=653 p99=945",
+        "callback_including_verification_us_p50=72 p95=159 p99=221",
+        "ack_roundtrip_us_p50=1579 p95=2986 p99=40729",
+        "connections=16 gzip=true buffered=true batches=1600 events=7088 elapsed=211.350679ms batches_per_second=7570"
+      ]
+    },
+    {
+      "connections": 128,
+      "gzip": true,
+      "buffered": true,
+      "returncode": 0,
+      "cpu_seconds": 8.032190999999994,
+      "sampled_peak_rss_kib": 41008,
+      "sampled_peak_fds": 263,
+      "sampled_peak_threads": 134,
+      "metrics": [
+        "ack_write_us_p50=14 p95=33 p99=49",
+        "decode_us_p50=283 p95=710 p99=969",
+        "callback_including_verification_us_p50=80 p95=198 p99=277",
+        "ack_roundtrip_us_p50=13543 p95=24416 p99=40807",
+        "connections=128 gzip=true buffered=true batches=12800 events=56704 elapsed=1.489619668s batches_per_second=8593"
+      ]
+    }
+  ],
+  "release_methodology": "Original event bytes; ordered envelope cursor and requested ACK appended. References and compressed frames prepared before timing. Four Tokio network workers; one dispatcher per buffered connection. Both loopback endpoints share the test runtime. Resource peaks sampled every 50 ms; debug measurements are retained separately in the audit document."
+}

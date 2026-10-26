@@ -764,7 +764,7 @@ pub(crate) fn preflight_event(
     method: &str,
     payload: &[u8],
     budget: &mut usize,
-) -> (bool, Option<u64>) {
+) -> (Option<crate::NormalizationStatus>, Option<u64>) {
     fn scan(
         payload: &[u8],
         schema: Option<&'static MessageSchema>,
@@ -772,20 +772,20 @@ pub(crate) fn preflight_event(
         left: &mut usize,
         common: bool,
         timestamp: &mut Option<u64>,
-    ) -> bool {
+    ) -> Option<crate::NormalizationStatus> {
         use ttl_sign_core::proto::{Reader, WireValue};
         let mut reader = Reader::new(payload);
         let mut seen_common = false;
         let mut seen_timestamp = false;
         while let Some(field) = reader.next_field() {
             if *left == 0 {
-                return true;
+                return Some(crate::NormalizationStatus::FieldLimit);
             }
             let Ok((number, value)) = field else {
-                return true;
+                return Some(crate::NormalizationStatus::MalformedWire);
             };
             if number == 0 || number > 0x1fffffff {
-                return true;
+                return Some(crate::NormalizationStatus::MalformedWire);
             }
             let descriptor = schema.and_then(|s| s.field(number));
             if common && !seen_timestamp && descriptor.is_some_and(|d| d.name == "create_time") {
@@ -812,19 +812,19 @@ pub(crate) fn preflight_event(
                     let mut cursor = Cursor { bytes, pos: 0 };
                     while cursor.pos < bytes.len() {
                         if *left == 0 {
-                            return true;
+                            return Some(crate::NormalizationStatus::FieldLimit);
                         }
                         *left -= 1;
                         if cursor.value(wire).is_err() {
-                            return true;
+                            return Some(crate::NormalizationStatus::MalformedWire);
                         }
                     }
                     continue;
                 }
                 *left -= 1;
                 if let Some(FieldKind::Message(name)) = descriptor.map(|d| d.kind) {
-                    if depth >= MAX_NORMALIZATION_DEPTH || *left == 0 {
-                        return true;
+                    if depth >= MAX_NORMALIZATION_DEPTH {
+                        return Some(crate::NormalizationStatus::DepthLimit);
                     }
                     let is_common = depth == 0
                         && !seen_common
@@ -832,7 +832,7 @@ pub(crate) fn preflight_event(
                     if is_common {
                         seen_common = true;
                     }
-                    if scan(
+                    if let Some(issue) = scan(
                         bytes,
                         schema_by_name(name),
                         depth + 1,
@@ -840,19 +840,19 @@ pub(crate) fn preflight_event(
                         is_common,
                         timestamp,
                     ) {
-                        return true;
+                        return Some(issue);
                     }
                 }
             } else {
                 *left -= 1;
             }
         }
-        false
+        None
     }
     let allowance = (*budget).min(MAX_SCHEMA_FIELDS);
     let mut left = allowance;
     let mut timestamp = None;
-    let truncated = scan(
+    let mut issue = scan(
         payload,
         schema_for_method(method),
         0,
@@ -861,5 +861,8 @@ pub(crate) fn preflight_event(
         &mut timestamp,
     );
     *budget -= allowance - left;
-    (truncated, timestamp)
+    if issue == Some(crate::NormalizationStatus::FieldLimit) && allowance < MAX_SCHEMA_FIELDS {
+        issue = Some(crate::NormalizationStatus::BatchFieldLimit);
+    }
+    (issue, timestamp)
 }

@@ -50,6 +50,8 @@ export type LiveEvent =
   | UnknownEvent;
 
 export interface WebSocketOptions {
+  maxPayload?: number;
+  perMessageDeflate?: boolean;
   headers: Record<string, string>;
 }
 

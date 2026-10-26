@@ -2,9 +2,9 @@
 //! `WebcastEmoteChatMessage`, and the degradation rules that keep one malformed
 //! emote from ever taking down a chat message.
 //!
-//! The `fixtures/events/*.pb` files are synthetic (built by
-//! `examples/make-fixtures.rs`), not captured traffic; the comment texts are
-//! chosen so the boundary cases are explicit. The remaining cases are encoded
+//! Most emote fixtures are synthetic (`examples/make-fixtures.rs`).
+//! `captured-inline-emote.pb` is reduced/sanitized from real traffic. Other
+//! fixtures use explicit synthetic boundary cases; additional cases are encoded
 //! inline here so a rule can be pinned without a new committed file.
 
 use std::path::{Path, PathBuf};
@@ -450,4 +450,28 @@ fn an_unmodelled_method_still_falls_back_to_unknown() {
     let event = decode_event("WebcastEmoteSomethingElse", &[8, 1]);
     assert!(event.is_unknown());
     assert_eq!(event.method(), "WebcastEmoteSomethingElse");
+}
+
+#[test]
+fn sanitized_real_inline_emote_matches_the_node_oracle_and_wire_presence() {
+    let payload = fixture("captured-inline-emote.pb");
+    let envelope = ttl_live_events::decode_event_envelope(method::CHAT, 1, false, &payload);
+    let expected: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures().join("expected/captured-inline-emote.json")).unwrap(),
+    )
+    .unwrap();
+    let LiveEvent::Chat(chat) = &envelope.event else {
+        panic!("expected captured chat");
+    };
+    assert_eq!(chat.comment, expected["comment"].as_str().unwrap());
+    assert_eq!(
+        serde_json::to_value(&chat.emotes).unwrap(),
+        expected["emotes"]
+    );
+    assert_eq!(
+        envelope.wire_emote_entries(),
+        Some((chat.emotes.len(), true))
+    );
+    assert_eq!(chat.user.id, 1);
+    assert_eq!(chat.user.nickname, "fixture");
 }

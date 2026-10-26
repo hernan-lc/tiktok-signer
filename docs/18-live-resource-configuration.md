@@ -42,10 +42,12 @@ Sandbox pending fake timers are capped at 1024; diagnostic access keys at 4096.
 
 ## Native callback delivery
 
-The existing C API uses synchronous callbacks by default. Call
-`ttl_live_client_set_async_delivery(client, capacity)` while disconnected to opt
-into one ordered dispatcher; capacity 0 restores synchronous mode. Capacity
-1–256 bounds queued batch/state/error deliveries. Each batch remains subject to
+The C API defaults to one ordered dispatcher with capacity 32. Call
+`ttl_live_client_set_async_delivery(client, capacity)` while disconnected to select
+1–256 queued batch/state/error deliveries; capacity 0 explicitly selects legacy
+synchronous callbacks, which must return promptly. Asynchronous delivery also
+limits queued and active deliveries to 8 MiB of estimated retained memory,
+including cursor/internal-extension metadata. Each batch remains subject to
 the decoder's byte/message limits. Slow callbacks may fill the queue. Overflow
 cancels reception, releases queued deliveries, and reports a terminal error after
 the active callback returns. Financial events are never silently discarded while
@@ -55,6 +57,10 @@ the connection continues.
 release it with `ttl_string_free`. It exposes event/queue counters, active
 connections, reconnects and ACK/decode/callback duration histograms. Core sinks
 can opt into decode/ACK timing hooks without changing existing implementations.
+`ttl_live_core::run` invokes inline sinks; `run_buffered` owns one dispatcher
+thread with 32 queued notifications and an 8 MiB estimated memory budget. Mobile
+LIVE clients use `run_buffered` by default. Queue saturation stops reception and
+reports `Backpressure`; callbacks must eventually return for shutdown to join.
 
 `ttl_live_client_delivery_metrics` reports queue depth, received/dispatched/
 discarded event counts and rejections. Disconnect disables callbacks and joins
