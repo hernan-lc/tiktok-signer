@@ -179,7 +179,7 @@ async fn connect_room(preset: &Preset, jar: &CookieJar, bundle: &str, room_id: &
     // for a request shape `im/fetch` would answer: it answers 200 with zero bytes because nothing
     // depends on its answer any more.
     println!("\n[4/5] building and signing the socket URL…");
-    if !jar.get("sessionid").is_some_and(|value| !value.is_empty()) {
+    if jar.get("sessionid").is_none_or(|value| value.is_empty()) {
         println!("      skipped: the message socket refuses a jar-less handshake — measured as an");
         println!("      immediate 1006, before a frame is exchanged. Store a session and re-run.");
         return;
@@ -334,7 +334,7 @@ async fn listen(opened: Result<ReconnectingConnection, ttl_live_ws::StreamError>
         .expect("audit report");
     }
     if audit_only {
-        println!("AUDIT {}", report);
+        println!("AUDIT {report}");
     }
     println!("      {frames} frames decoded");
     if reconnects > 0 {

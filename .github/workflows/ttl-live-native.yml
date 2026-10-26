@@ -52,11 +52,18 @@ jobs:
         if: runner.os == 'Windows'
         shell: cmd
         run: |
+          if not exist target\${{ matrix.target }}\release\ttl_live.dll.lib exit /b 1
+          if not exist target\${{ matrix.target }}\release\ttl_live.dll exit /b 1
           cl /nologo /W4 /WX /Icrates\ttl-live-native\include crates\ttl-live-native\tests\smoke.c target\${{ matrix.target }}\release\ttl_live.dll.lib /Fe:ttl-native-c.exe
+          if errorlevel 1 exit /b 1
           copy target\${{ matrix.target }}\release\ttl_live.dll .
+          if errorlevel 1 exit /b 1
           ttl-native-c.exe
-          cl /nologo /W4 /WX /TP /Icrates\ttl-live-native\include crates\ttl-live-native\tests\smoke.c target\${{ matrix.target }}\release\ttl_live.dll.lib /Fe:ttl-native-cpp.exe
+          if errorlevel 1 exit /b 1
+          cl /nologo /W4 /WX /Tp crates\ttl-live-native\tests\smoke.c /Icrates\ttl-live-native\include target\${{ matrix.target }}\release\ttl_live.dll.lib /Fe:ttl-native-cpp.exe
+          if errorlevel 1 exit /b 1
           ttl-native-cpp.exe
+          if errorlevel 1 exit /b 1
       - name: Stage libraries and curated headers
         shell: bash
         run: |

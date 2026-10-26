@@ -2,6 +2,8 @@ plugins { id("com.google.protobuf") version "0.9.5" apply false }
 allprojects { group = "io.github.nglmercer"; version = "0.1.0-SNAPSHOT"; repositories { mavenCentral() } }
 subprojects {
     val moduleName = name
+    val testJavaExecutable =
+        if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) "java.exe" else "java"
     apply(plugin = "java-library")
     extensions.configure<JavaPluginExtension> {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -20,7 +22,9 @@ subprojects {
     }
     tasks.withType<Test>().configureEach {
         useJUnitPlatform()
-        providers.gradleProperty("javaTestHome").orNull?.let { executable = "$it/bin/java" }
+        providers.gradleProperty("javaTestHome").orNull?.let {
+            executable = java.io.File(it, "bin/$testJavaExecutable").absolutePath
+        }
         systemProperty("repositoryRoot", rootProject.projectDir.parentFile.parentFile.absolutePath)
     }
     if (name.startsWith("live-") && name != "live-proto") {
