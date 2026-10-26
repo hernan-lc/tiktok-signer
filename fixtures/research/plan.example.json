@@ -283,8 +283,8 @@
       }
     },
     {
-      "id": "query-remove-notice",
-      "description": "Does omitting notice change the SDK-added signing fields?",
+      "id": "query-remove-region",
+      "description": "Does omitting region change signing output?",
       "request": {
         "room_id": "7300000000000000000"
       },
@@ -296,7 +296,7 @@
         "sup_ws_ds_opt": 1,
         "query_mutation": {
           "kind": "remove",
-          "name": "notice",
+          "name": "region",
           "occurrence": 0
         }
       },

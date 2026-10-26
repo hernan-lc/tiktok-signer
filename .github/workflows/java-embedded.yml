@@ -12,17 +12,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, ubuntu-24.04-arm]
+        os: [ubuntu-24.04, windows-latest, ubuntu-24.04-arm]
         java: ['17', '21', '25']
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
         id: buildjdk
         with:
           distribution: temurin
           java-version: '21'
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         id: testjdk
         with:
           distribution: temurin
